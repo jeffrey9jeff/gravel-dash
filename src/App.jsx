@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { elevationProfile, routeCoords } from "./routeData.js";
 
 const RIDE_DATE = new Date("2026-06-06T05:00:00+10:00");
 
@@ -152,6 +153,141 @@ function CountdownBlock({ countdown }) {
           {i < units.length - 1 && <span style={s.countdownSep}>:</span>}
         </div>
       ))}
+    </div>
+  );
+}
+
+function RoutePanel() {
+  const W = 608;
+  const MAP_H = 180;
+  const ELEV_H = 100;
+
+  // Build route SVG path
+  const routePath = useMemo(() => {
+    if (!routeCoords.length) return "";
+    const lats = routeCoords.map((c) => c[0]);
+    const lons = routeCoords.map((c) => c[1]);
+    const minLat = Math.min(...lats), maxLat = Math.max(...lats);
+    const minLon = Math.min(...lons), maxLon = Math.max(...lons);
+    const pad = 16;
+    const w = W - pad * 2, h = MAP_H - pad * 2;
+    const scale = Math.min(w / (maxLon - minLon), h / (maxLat - minLat));
+    return routeCoords
+      .map((c, i) => {
+        const x = pad + (c[1] - minLon) * scale;
+        const y = pad + (maxLat - c[0]) * scale;
+        return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
+      })
+      .join(" ");
+  }, []);
+
+  // Build elevation SVG
+  const { elevPath, elevFill, elevLabels } = useMemo(() => {
+    if (!elevationProfile.length) return { elevPath: "", elevFill: "", elevLabels: [] };
+    const maxD = elevationProfile[elevationProfile.length - 1].d;
+    const minE = Math.min(...elevationProfile.map((p) => p.e));
+    const maxE = Math.max(...elevationProfile.map((p) => p.e));
+    const pad = 0;
+    const w = W, h = ELEV_H;
+    const pts = elevationProfile.map((p) => {
+      const x = pad + (p.d / maxD) * (w - pad * 2);
+      const y = h - pad - ((p.e - minE) / (maxE - minE)) * (h - pad * 2 - 8);
+      return { x, y };
+    });
+    const path = pts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+    const fill = path + ` L${pts[pts.length - 1].x.toFixed(1)},${h} L${pts[0].x.toFixed(1)},${h} Z`;
+    const labels = [
+      { text: `${minE.toFixed(0)}m`, x: 4, y: h - 4 },
+      { text: `${maxE.toFixed(0)}m`, x: 4, y: 12 },
+    ];
+    // Distance markers
+    for (let km = 50; km < maxD / 1000; km += 50) {
+      const x = (km / (maxD / 1000)) * w;
+      labels.push({ text: `${km}km`, x, y: h - 4, anchor: "middle" });
+    }
+    return { elevPath: path, elevFill: fill, elevLabels: labels };
+  }, []);
+
+  return (
+    <div style={s.routePanel}>
+      {/* Route map */}
+      <div style={s.routeMapWrap}>
+        <svg width="100%" viewBox={`0 0 ${W} ${MAP_H}`} style={{ display: "block" }}>
+          {/* Grid dots */}
+          {Array.from({ length: 8 }).map((_, row) =>
+            Array.from({ length: 16 }).map((_, col) => (
+              <circle key={`${row}-${col}`} cx={col * (W / 15)} cy={row * (MAP_H / 7)} r="0.6" fill={T.border} />
+            ))
+          )}
+          {/* Route line shadow */}
+          <path d={routePath} fill="none" stroke={T.accent} strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" opacity="0.15" />
+          {/* Route line */}
+          <path d={routePath} fill="none" stroke={T.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          {/* Start dot */}
+          {routeCoords.length > 0 && (() => {
+            const lats = routeCoords.map(c => c[0]), lons = routeCoords.map(c => c[1]);
+            const minLat = Math.min(...lats), maxLat = Math.max(...lats);
+            const minLon = Math.min(...lons), maxLon = Math.max(...lons);
+            const scale = Math.min((W - 32) / (maxLon - minLon), (MAP_H - 32) / (maxLat - minLat));
+            const sx = 16 + (routeCoords[0][1] - minLon) * scale;
+            const sy = 16 + (maxLat - routeCoords[0][0]) * scale;
+            const ex = 16 + (routeCoords[routeCoords.length-1][1] - minLon) * scale;
+            const ey = 16 + (maxLat - routeCoords[routeCoords.length-1][0]) * scale;
+            return <>
+              <circle cx={sx} cy={sy} r="5" fill={T.green} />
+              <circle cx={sx} cy={sy} r="2" fill={T.white} />
+              <circle cx={ex} cy={ey} r="5" fill={T.accent} />
+              <circle cx={ex} cy={ey} r="2" fill={T.white} />
+            </>;
+          })()}
+        </svg>
+        <div style={s.routeLabels}>
+          <span style={s.routeLabelStart}>Brisbane</span>
+          <span style={s.routeLabelEnd}>Sunshine Coast</span>
+        </div>
+      </div>
+
+      {/* Elevation profile */}
+      <div style={s.elevWrap}>
+        <div style={{ fontFamily: FONT_DISPLAY, fontSize: 9, letterSpacing: 3, textTransform: "uppercase", color: T.textMuted, marginBottom: 6 }}>
+          Elevation Profile
+        </div>
+        <svg width="100%" viewBox={`0 0 ${W} ${ELEV_H}`} style={{ display: "block" }}>
+          {/* Fill */}
+          <path d={elevFill} fill="url(#elevGrad)" />
+          {/* Line */}
+          <path d={elevPath} fill="none" stroke={T.accent} strokeWidth="1.5" strokeLinejoin="round" />
+          {/* Gradient def */}
+          <defs>
+            <linearGradient id="elevGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={T.accent} stopOpacity="0.2" />
+              <stop offset="100%" stopColor={T.accent} stopOpacity="0.02" />
+            </linearGradient>
+          </defs>
+          {/* Labels */}
+          {elevLabels.map((l, i) => (
+            <text key={i} x={l.x} y={l.y} fontSize="8" fontFamily={FONT_BODY} fill={T.textMuted} textAnchor={l.anchor || "start"}>{l.text}</text>
+          ))}
+        </svg>
+      </div>
+
+      {/* Stats row */}
+      <div style={s.statsRow}>
+        <div style={s.statItem}>
+          <span style={s.statValue}>260</span>
+          <span style={s.statLabel}>KM</span>
+        </div>
+        <div style={s.statDivider} />
+        <div style={s.statItem}>
+          <span style={s.statValue}>3,650</span>
+          <span style={s.statLabel}>M ELEV</span>
+        </div>
+        <div style={s.statDivider} />
+        <div style={s.statItem}>
+          <span style={s.statValue}>358</span>
+          <span style={s.statLabel}>M PEAK</span>
+        </div>
+      </div>
     </div>
   );
 }
@@ -590,17 +726,23 @@ export default function GravelDashboard() {
 
   return (
     <div style={s.root}>
+      {/* Grain texture overlay */}
+      <div style={s.grain} />
+
       {/* Header */}
       <header style={s.header}>
         <div style={s.headerBadge}>GRAVEL</div>
         <h1 style={s.title}>Brisbane &rarr; Sunshine Coast</h1>
-        <p style={s.subtitle}>6 June 2026 &middot; 260km &middot; 3,650m elev</p>
+        <p style={s.subtitle}>6 June 2026 &middot; The Long Way Round</p>
       </header>
 
       {/* Countdown */}
       <section style={s.countdownSection}>
         <CountdownBlock countdown={countdown} />
       </section>
+
+      {/* Route & Elevation */}
+      <RoutePanel />
 
       {/* Rider tabs */}
       <nav style={s.riderNav}>
@@ -672,6 +814,17 @@ const s = {
     maxWidth: 640,
     margin: "0 auto",
     padding: "0 16px 40px",
+    overflow: "hidden",
+  },
+  grain: {
+    position: "fixed",
+    inset: 0,
+    opacity: 0.035,
+    backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`,
+    backgroundSize: "128px",
+    pointerEvents: "none",
+    zIndex: 0,
+    mixBlendMode: "multiply",
   },
   spinner: {
     width: 32, height: 32,
@@ -691,7 +844,7 @@ const s = {
     fontFamily: FONT_DISPLAY, fontSize: "clamp(22px, 6vw, 32px)", fontWeight: 700,
     textTransform: "uppercase", letterSpacing: 2, margin: "8px 0 4px", lineHeight: 1.1, color: T.text,
   },
-  subtitle: { fontSize: 12, color: T.textDim, letterSpacing: 2, textTransform: "uppercase", margin: 0 },
+  subtitle: { fontSize: 11, color: T.textDim, letterSpacing: 3, textTransform: "uppercase", margin: 0 },
 
   countdownSection: { margin: "28px 0 24px", position: "relative", zIndex: 1 },
   countdownRow: { display: "flex", justifyContent: "center", gap: 4 },
@@ -827,6 +980,52 @@ const s = {
     textTransform: "capitalize", letterSpacing: 0.5,
   },
   dirBtnActive: { color: T.accent, borderColor: T.accent, background: T.accentLight },
+
+  // Route panel
+  routePanel: {
+    margin: "0 0 20px", position: "relative", zIndex: 1,
+    background: T.white, border: `1px solid ${T.borderLight}`, borderRadius: 8,
+    overflow: "hidden",
+  },
+  routeMapWrap: {
+    position: "relative", padding: "0",
+    borderBottom: `1px solid ${T.borderLight}`,
+  },
+  routeLabels: {
+    position: "absolute", bottom: 8, left: 12, right: 12,
+    display: "flex", justifyContent: "space-between",
+  },
+  routeLabelStart: {
+    fontFamily: FONT_BODY, fontSize: 9, letterSpacing: 2, textTransform: "uppercase",
+    color: T.green, fontWeight: 600, background: "rgba(255,255,255,0.85)",
+    padding: "2px 6px", borderRadius: 3,
+  },
+  routeLabelEnd: {
+    fontFamily: FONT_BODY, fontSize: 9, letterSpacing: 2, textTransform: "uppercase",
+    color: T.accent, fontWeight: 600, background: "rgba(255,255,255,0.85)",
+    padding: "2px 6px", borderRadius: 3,
+  },
+  elevWrap: {
+    padding: "12px 16px 8px",
+    borderBottom: `1px solid ${T.borderLight}`,
+  },
+  statsRow: {
+    display: "flex", justifyContent: "center", alignItems: "center",
+    padding: "14px 16px", gap: 0,
+  },
+  statItem: {
+    display: "flex", flexDirection: "column", alignItems: "center", flex: 1,
+  },
+  statValue: {
+    fontFamily: FONT_DISPLAY, fontSize: 22, fontWeight: 700, color: T.text, lineHeight: 1,
+  },
+  statLabel: {
+    fontFamily: FONT_BODY, fontSize: 8, letterSpacing: 3, color: T.textMuted, marginTop: 3,
+    textTransform: "uppercase",
+  },
+  statDivider: {
+    width: 1, height: 28, background: T.borderLight,
+  },
 
   footer: {
     textAlign: "center", fontSize: 10, color: T.textMuted, letterSpacing: 1, marginTop: 32, position: "relative", zIndex: 1,
