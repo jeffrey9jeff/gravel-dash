@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback, useRef } from "react";
 
 const RIDE_DATE = new Date("2026-06-06T05:00:00+10:00");
 
-const RIDERS = ["Jeffrey", "Andrew", "Rider 3"];
+const RIDERS = ["Jeffrey", "Andrew", "Gus"];
+const RIDERS_WITH_FLIGHTS = ["Jeffrey", "Gus"];
 
 const DEFAULT_CHECKLIST = [
   { id: "bike_service", label: "Bike service / tune-up", type: "tick" },
@@ -29,19 +30,50 @@ const DEFAULT_CHECKLIST = [
   { id: "pump", label: "Mini pump", type: "tick" },
 ];
 
-const STORAGE_KEY = "gravel-dash-v1";
+const STORAGE_KEY = "gravel-dash-v2";
 
 function getDefaultState() {
   const checklist = {};
+  const checklistItems = {};
+  const checklistTargets = {};
   const training = {};
+  const flights = {};
   RIDERS.forEach((r) => {
     checklist[r] = {};
+    checklistItems[r] = DEFAULT_CHECKLIST.map((item) => ({ ...item }));
+    checklistTargets[r] = {};
     DEFAULT_CHECKLIST.forEach((item) => {
       checklist[r][item.id] = item.type === "tick" ? false : 0;
+      if (item.type === "count") checklistTargets[r][item.id] = item.max;
     });
     training[r] = [];
+    flights[r] = [];
   });
-  return { checklist, training, riderNames: [...RIDERS] };
+  return { checklist, checklistItems, checklistTargets, training, flights, riderNames: [...RIDERS] };
+}
+
+function migrateState(parsed) {
+  // Migrate from v1 format
+  if (!parsed.checklistItems) {
+    parsed.checklistItems = {};
+    parsed.checklistTargets = {};
+    (parsed.riderNames || RIDERS).forEach((r) => {
+      parsed.checklistItems[r] = DEFAULT_CHECKLIST.map((item) => ({ ...item }));
+      parsed.checklistTargets[r] = {};
+      DEFAULT_CHECKLIST.forEach((item) => {
+        if (item.type === "count") {
+          parsed.checklistTargets[r][item.id] = item.max;
+        }
+      });
+    });
+  }
+  if (!parsed.flights) {
+    parsed.flights = {};
+    (parsed.riderNames || RIDERS).forEach((r) => {
+      parsed.flights[r] = [];
+    });
+  }
+  return parsed;
 }
 
 // Debounced save
@@ -75,6 +107,29 @@ function useCountdown(target) {
   return { days, hours, mins, secs, total: diff };
 }
 
+// --- Theme ---
+const T = {
+  bg: "#f5f3ef",
+  bgCard: "#ffffff",
+  bgCardHover: "#fafaf8",
+  border: "#e0dcd4",
+  borderLight: "#ece8e1",
+  text: "#2c2825",
+  textDim: "#8a847a",
+  textMuted: "#b5afa5",
+  accent: "#d45a1f",
+  accentLight: "rgba(212,90,31,0.08)",
+  accentBorder: "rgba(212,90,31,0.25)",
+  green: "#2d8a4e",
+  greenBg: "rgba(45,138,78,0.1)",
+  yellow: "#b58a1b",
+  red: "#c43e2a",
+  white: "#ffffff",
+};
+
+const FONT_DISPLAY = "'Oswald', sans-serif";
+const FONT_BODY = "'IBM Plex Mono', monospace";
+
 // --- Components ---
 
 function CountdownBlock({ countdown }) {
@@ -85,20 +140,122 @@ function CountdownBlock({ countdown }) {
     { label: "SEC", value: countdown.secs },
   ];
   return (
-    <div style={styles.countdownRow}>
+    <div style={s.countdownRow}>
       {units.map((u, i) => (
         <div key={u.label} style={{ display: "flex", alignItems: "center" }}>
-          <div style={styles.countdownUnit}>
-            <span style={styles.countdownNumber}>
+          <div style={s.countdownUnit}>
+            <span style={s.countdownNumber}>
               {String(u.value).padStart(2, "0")}
             </span>
-            <span style={styles.countdownLabel}>{u.label}</span>
+            <span style={s.countdownLabel}>{u.label}</span>
           </div>
-          {i < units.length - 1 && (
-            <span style={styles.countdownSep}>:</span>
-          )}
+          {i < units.length - 1 && <span style={s.countdownSep}>:</span>}
         </div>
       ))}
+    </div>
+  );
+}
+
+function FlightsPanel({ rider, flights, onUpdate }) {
+  const [adding, setAdding] = useState(false);
+  const [form, setForm] = useState({ direction: "outbound", airline: "", flightNo: "", date: "", depart: "", arrive: "", conf: "", notes: "" });
+
+  const handleAdd = () => {
+    if (!form.date || !form.flightNo) return;
+    onUpdate([...flights, { ...form, id: Date.now() }]);
+    setForm({ direction: "outbound", airline: "", flightNo: "", date: "", depart: "", arrive: "", conf: "", notes: "" });
+    setAdding(false);
+  };
+
+  const handleRemove = (id) => {
+    onUpdate(flights.filter((f) => f.id !== id));
+  };
+
+  const outbound = flights.filter((f) => f.direction === "outbound");
+  const returnFlights = flights.filter((f) => f.direction === "return");
+
+  const renderFlight = (f) => (
+    <div key={f.id} style={s.flightCard}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <div>
+          <div style={{ fontFamily: FONT_DISPLAY, fontSize: 18, fontWeight: 600, color: T.text }}>
+            {f.airline} {f.flightNo}
+          </div>
+          <div style={{ fontSize: 12, color: T.textDim, marginTop: 2 }}>{f.date}</div>
+        </div>
+        <button onClick={() => handleRemove(f.id)} style={s.deleteBtn}>&times;</button>
+      </div>
+      <div style={{ display: "flex", gap: 24, marginTop: 10, fontSize: 12 }}>
+        <div>
+          <div style={{ color: T.textMuted, fontSize: 9, letterSpacing: 2, textTransform: "uppercase" }}>Depart</div>
+          <div style={{ color: T.text, fontWeight: 500 }}>{f.depart || "—"}</div>
+        </div>
+        <div style={{ color: T.textMuted, alignSelf: "center", fontSize: 16 }}>&rarr;</div>
+        <div>
+          <div style={{ color: T.textMuted, fontSize: 9, letterSpacing: 2, textTransform: "uppercase" }}>Arrive</div>
+          <div style={{ color: T.text, fontWeight: 500 }}>{f.arrive || "—"}</div>
+        </div>
+      </div>
+      {f.conf && (
+        <div style={{ marginTop: 8, fontSize: 11, color: T.textDim }}>
+          Conf: <span style={{ color: T.text, fontWeight: 500 }}>{f.conf}</span>
+        </div>
+      )}
+      {f.notes && (
+        <div style={{ marginTop: 4, fontSize: 11, color: T.textDim, fontStyle: "italic" }}>{f.notes}</div>
+      )}
+    </div>
+  );
+
+  return (
+    <div>
+      {outbound.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <div style={s.flightSectionLabel}>Outbound</div>
+          {outbound.map(renderFlight)}
+        </div>
+      )}
+      {returnFlights.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <div style={s.flightSectionLabel}>Return</div>
+          {returnFlights.map(renderFlight)}
+        </div>
+      )}
+      {flights.length === 0 && !adding && (
+        <div style={{ textAlign: "center", padding: "40px 0", color: T.textMuted, fontSize: 12 }}>
+          No flights added yet
+        </div>
+      )}
+
+      {adding ? (
+        <div style={s.flightForm}>
+          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+            {["outbound", "return"].map((d) => (
+              <button key={d} onClick={() => setForm({ ...form, direction: d })} style={{
+                ...s.dirBtn,
+                ...(form.direction === d ? s.dirBtnActive : {}),
+              }}>
+                {d}
+              </button>
+            ))}
+          </div>
+          <div style={s.formGrid}>
+            <input placeholder="Airline" value={form.airline} onChange={(e) => setForm({ ...form, airline: e.target.value })} style={s.formInput} />
+            <input placeholder="Flight #" value={form.flightNo} onChange={(e) => setForm({ ...form, flightNo: e.target.value })} style={s.formInput} />
+            <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} style={s.formInput} />
+            <input placeholder="Depart time" value={form.depart} onChange={(e) => setForm({ ...form, depart: e.target.value })} style={s.formInput} />
+            <input placeholder="Arrive time" value={form.arrive} onChange={(e) => setForm({ ...form, arrive: e.target.value })} style={s.formInput} />
+            <input placeholder="Confirmation #" value={form.conf} onChange={(e) => setForm({ ...form, conf: e.target.value })} style={s.formInput} />
+          </div>
+          <input placeholder="Notes" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} style={{ ...s.formInput, width: "100%", marginTop: 6 }} />
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <button onClick={handleAdd} style={s.primaryBtn}>Add flight</button>
+            <button onClick={() => setAdding(false)} style={s.ghostBtn}>Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <button onClick={() => setAdding(true)} style={s.addItemBtn}>+ Add flight</button>
+      )}
     </div>
   );
 }
@@ -118,52 +275,27 @@ function TrainingPanel({ rider, sessions, onAdd, onRemove }) {
   };
 
   return (
-    <div style={styles.trainingCard}>
-      <div style={styles.trainingHeader}>
-        <span style={styles.trainingTotal}>{totalHrs.toFixed(1)}</span>
-        <span style={styles.trainingTotalLabel}>hrs trained</span>
+    <div>
+      <div style={s.trainingHeader}>
+        <span style={s.trainingTotal}>{totalHrs.toFixed(1)}</span>
+        <span style={s.trainingTotalLabel}>hrs trained</span>
       </div>
-      <div style={styles.trainingInputRow}>
-        <input
-          type="date"
-          value={date}
-          onChange={(e) => setDate(e.target.value)}
-          style={{ ...styles.input, flex: 1.2 }}
-        />
-        <input
-          type="number"
-          step="0.5"
-          min="0"
-          placeholder="Hrs"
-          value={hrs}
-          onChange={(e) => setHrs(e.target.value)}
-          style={{ ...styles.input, flex: 0.6 }}
-        />
-        <input
-          placeholder="Note"
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          style={{ ...styles.input, flex: 1.4 }}
-        />
-        <button onClick={handleAdd} style={styles.addBtn}>
-          +
-        </button>
+      <div style={s.trainingInputRow}>
+        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ ...s.formInput, flex: 1.2 }} />
+        <input type="number" step="0.5" min="0" placeholder="Hrs" value={hrs} onChange={(e) => setHrs(e.target.value)} style={{ ...s.formInput, flex: 0.6 }} />
+        <input placeholder="Note" value={note} onChange={(e) => setNote(e.target.value)} style={{ ...s.formInput, flex: 1.4 }} />
+        <button onClick={handleAdd} style={s.primaryBtn}>+</button>
       </div>
       {sessions.length > 0 && (
-        <div style={styles.sessionList}>
+        <div style={s.sessionList}>
           {[...sessions]
             .sort((a, b) => b.date.localeCompare(a.date))
-            .map((s, i) => (
-              <div key={i} style={styles.sessionRow}>
-                <span style={styles.sessionDate}>{s.date}</span>
-                <span style={styles.sessionHrs}>{s.hours}h</span>
-                <span style={styles.sessionNote}>{s.note}</span>
-                <button
-                  onClick={() => onRemove(i)}
-                  style={styles.removeBtn}
-                >
-                  &times;
-                </button>
+            .map((sess, i) => (
+              <div key={i} style={s.sessionRow}>
+                <span style={s.sessionDate}>{sess.date}</span>
+                <span style={s.sessionHrs}>{sess.hours}h</span>
+                <span style={s.sessionNote}>{sess.note}</span>
+                <button onClick={() => onRemove(i)} style={s.deleteBtn}>&times;</button>
               </div>
             ))}
         </div>
@@ -172,103 +304,121 @@ function TrainingPanel({ rider, sessions, onAdd, onRemove }) {
   );
 }
 
-function ChecklistPanel({ rider, state, onChange }) {
-  const total = DEFAULT_CHECKLIST.length;
-  const done = DEFAULT_CHECKLIST.filter((item) => {
-    const val = state[item.id];
+function ChecklistPanel({ rider, items, targets, values, onChange, onDeleteItem, onAddItem, onEditTarget }) {
+  const [newLabel, setNewLabel] = useState("");
+  const [newType, setNewType] = useState("tick");
+  const [newMax, setNewMax] = useState(3);
+  const [showAdd, setShowAdd] = useState(false);
+  const [editingTarget, setEditingTarget] = useState(null);
+
+  const total = items.length;
+  const done = items.filter((item) => {
+    const val = values[item.id];
     return item.type === "tick" ? val === true : val > 0;
   }).length;
-  const pct = Math.round((done / total) * 100);
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+
+  const handleAdd = () => {
+    if (!newLabel.trim()) return;
+    const id = "custom_" + Date.now();
+    const max = newType === "count" ? parseInt(newMax) || 3 : undefined;
+    onAddItem({ id, label: newLabel.trim(), type: newType, max });
+    setNewLabel("");
+    setNewType("tick");
+    setNewMax(3);
+    setShowAdd(false);
+  };
 
   return (
-    <div style={styles.checklistCard}>
-      <div style={styles.progressBarOuter}>
-        <div
-          style={{
-            ...styles.progressBarInner,
-            width: `${pct}%`,
-            background:
-              pct === 100
-                ? "#22c55e"
-                : pct > 50
-                ? "#eab308"
-                : "#ef4444",
-          }}
-        />
-        <span style={styles.progressText}>
-          {done}/{total} — {pct}%
-        </span>
-      </div>
-      <div style={styles.checklistGrid}>
-        {DEFAULT_CHECKLIST.map((item) => (
-          <div key={item.id} style={styles.checklistItem}>
-            {item.type === "tick" ? (
-              <button
-                onClick={() => onChange(item.id, !state[item.id])}
-                style={{
-                  ...styles.tickBtn,
-                  background: state[item.id]
-                    ? "#22c55e"
-                    : "rgba(255,255,255,0.06)",
-                  color: state[item.id] ? "#000" : "#888",
-                  borderColor: state[item.id]
-                    ? "#22c55e"
-                    : "rgba(255,255,255,0.12)",
-                }}
-              >
-                {state[item.id] ? "\u2713" : ""}
-              </button>
-            ) : (
-              <div style={styles.counterGroup}>
-                <button
-                  onClick={() =>
-                    onChange(
-                      item.id,
-                      Math.max(0, (state[item.id] || 0) - 1)
-                    )
-                  }
-                  style={styles.counterBtn}
-                >
-                  &minus;
-                </button>
-                <span style={styles.counterVal}>
-                  {state[item.id] || 0}
-                </span>
-                <button
-                  onClick={() =>
-                    onChange(
-                      item.id,
-                      Math.min(item.max, (state[item.id] || 0) + 1)
-                    )
-                  }
-                  style={styles.counterBtn}
-                >
-                  +
-                </button>
-              </div>
+    <div>
+      {/* Add item button */}
+      {showAdd ? (
+        <div style={s.addItemForm}>
+          <input placeholder="Item name" value={newLabel} onChange={(e) => setNewLabel(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleAdd()} style={{ ...s.formInput, flex: 1 }} />
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            {["tick", "count"].map((t) => (
+              <button key={t} onClick={() => setNewType(t)} style={{
+                ...s.dirBtn,
+                ...(newType === t ? s.dirBtnActive : {}),
+              }}>{t}</button>
+            ))}
+            {newType === "count" && (
+              <input type="number" min="1" value={newMax} onChange={(e) => setNewMax(e.target.value)}
+                style={{ ...s.formInput, width: 50, textAlign: "center" }} placeholder="Max" />
             )}
-            <span
-              style={{
-                ...styles.checklistLabel,
-                opacity:
-                  (item.type === "tick" && state[item.id]) ||
-                  (item.type === "count" && state[item.id] > 0)
-                    ? 0.5
-                    : 1,
-                textDecoration:
-                  (item.type === "tick" && state[item.id]) ||
-                  (item.type === "count" && state[item.id] >= item.max)
-                    ? "line-through"
-                    : "none",
-              }}
-            >
-              {item.label}
-              {item.type === "count" && (
-                <span style={styles.maxLabel}> /{item.max}</span>
-              )}
-            </span>
           </div>
-        ))}
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={handleAdd} style={s.primaryBtn}>Add</button>
+            <button onClick={() => setShowAdd(false)} style={s.ghostBtn}>Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <button onClick={() => setShowAdd(true)} style={{ ...s.addItemBtn, marginBottom: 12 }}>+ Add item</button>
+      )}
+
+      {/* Progress bar */}
+      <div style={s.progressBarOuter}>
+        <div style={{
+          ...s.progressBarInner,
+          width: `${pct}%`,
+          background: pct === 100 ? T.green : pct > 50 ? T.yellow : T.red,
+        }} />
+        <span style={s.progressText}>{done}/{total} — {pct}%</span>
+      </div>
+
+      {/* Items */}
+      <div style={s.checklistGrid}>
+        {items.map((item) => {
+          const target = targets[item.id] || item.max;
+          return (
+            <div key={item.id} style={s.checklistItem}>
+              {item.type === "tick" ? (
+                <button onClick={() => onChange(item.id, !values[item.id])} style={{
+                  ...s.tickBtn,
+                  background: values[item.id] ? T.green : T.white,
+                  color: values[item.id] ? T.white : T.textMuted,
+                  borderColor: values[item.id] ? T.green : T.border,
+                }}>
+                  {values[item.id] ? "\u2713" : ""}
+                </button>
+              ) : (
+                <div style={s.counterGroup}>
+                  <button onClick={() => onChange(item.id, Math.max(0, (values[item.id] || 0) - 1))} style={s.counterBtn}>&minus;</button>
+                  <span style={s.counterVal}>{values[item.id] || 0}</span>
+                  <button onClick={() => onChange(item.id, Math.min(target || 99, (values[item.id] || 0) + 1))} style={s.counterBtn}>+</button>
+                </div>
+              )}
+              <span style={{
+                ...s.checklistLabel,
+                flex: 1,
+                opacity: (item.type === "tick" && values[item.id]) || (item.type === "count" && values[item.id] > 0) ? 0.45 : 1,
+                textDecoration: (item.type === "tick" && values[item.id]) || (item.type === "count" && values[item.id] >= target) ? "line-through" : "none",
+              }}>
+                {item.label}
+                {item.type === "count" && (
+                  editingTarget === item.id ? (
+                    <input
+                      autoFocus
+                      type="number"
+                      min="1"
+                      defaultValue={target}
+                      onBlur={(e) => { onEditTarget(item.id, parseInt(e.target.value) || target); setEditingTarget(null); }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") { onEditTarget(item.id, parseInt(e.target.value) || target); setEditingTarget(null); }
+                        if (e.key === "Escape") setEditingTarget(null);
+                      }}
+                      style={{ ...s.formInput, width: 40, marginLeft: 6, padding: "2px 4px", textAlign: "center", fontSize: 11 }}
+                    />
+                  ) : (
+                    <span onClick={() => setEditingTarget(item.id)} style={s.targetLabel} title="Click to edit target"> /{target}</span>
+                  )
+                )}
+              </span>
+              <button onClick={() => onDeleteItem(item.id)} style={s.deleteBtn}>&times;</button>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -288,21 +438,54 @@ export default function GravelDashboard() {
 
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
+      // Try v2 first, then fall back to v1
+      let raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) raw = localStorage.getItem("gravel-dash-v1");
       if (raw) {
-        const parsed = JSON.parse(raw);
-        // Ensure all riders have all checklist items
-        const def = getDefaultState();
-        parsed.riderNames = parsed.riderNames || def.riderNames;
+        const parsed = migrateState(JSON.parse(raw));
+        parsed.riderNames = parsed.riderNames || [...RIDERS];
+        // Rename "Rider 3" to "Gus" if migrating
+        const r3idx = parsed.riderNames.indexOf("Rider 3");
+        if (r3idx !== -1) {
+          parsed.riderNames[r3idx] = "Gus";
+          if (parsed.checklist["Rider 3"]) {
+            parsed.checklist["Gus"] = parsed.checklist["Rider 3"];
+            delete parsed.checklist["Rider 3"];
+          }
+          if (parsed.training["Rider 3"]) {
+            parsed.training["Gus"] = parsed.training["Rider 3"];
+            delete parsed.training["Rider 3"];
+          }
+          if (parsed.checklistItems["Rider 3"]) {
+            parsed.checklistItems["Gus"] = parsed.checklistItems["Rider 3"];
+            delete parsed.checklistItems["Rider 3"];
+          }
+          if (parsed.checklistTargets["Rider 3"]) {
+            parsed.checklistTargets["Gus"] = parsed.checklistTargets["Rider 3"];
+            delete parsed.checklistTargets["Rider 3"];
+          }
+          if (parsed.flights["Rider 3"]) {
+            parsed.flights["Gus"] = parsed.flights["Rider 3"];
+            delete parsed.flights["Rider 3"];
+          }
+        }
+        // Ensure all riders have entries
         parsed.riderNames.forEach((r) => {
           if (!parsed.checklist[r]) parsed.checklist[r] = {};
-          DEFAULT_CHECKLIST.forEach((item) => {
+          if (!parsed.checklistItems[r]) parsed.checklistItems[r] = DEFAULT_CHECKLIST.map((item) => ({ ...item }));
+          if (!parsed.checklistTargets[r]) {
+            parsed.checklistTargets[r] = {};
+            DEFAULT_CHECKLIST.forEach((item) => {
+              if (item.type === "count") parsed.checklistTargets[r][item.id] = item.max;
+            });
+          }
+          parsed.checklistItems[r].forEach((item) => {
             if (parsed.checklist[r][item.id] === undefined) {
-              parsed.checklist[r][item.id] =
-                item.type === "tick" ? false : 0;
+              parsed.checklist[r][item.id] = item.type === "tick" ? false : 0;
             }
           });
           if (!parsed.training[r]) parsed.training[r] = [];
+          if (!parsed.flights[r]) parsed.flights[r] = [];
         });
         setState(parsed);
       } else {
@@ -315,111 +498,125 @@ export default function GravelDashboard() {
   }, []);
 
   const riderName = state?.riderNames?.[activeRider] || RIDERS[activeRider];
+  const hasFlight = RIDERS_WITH_FLIGHTS.includes(riderName);
 
-  const updateChecklist = useCallback(
-    (itemId, value) => {
-      setState((prev) => {
-        const next = JSON.parse(JSON.stringify(prev));
-        next.checklist[riderName][itemId] = value;
-        return next;
-      });
-    },
-    [riderName]
-  );
+  const updateChecklist = useCallback((itemId, value) => {
+    setState((prev) => {
+      const next = JSON.parse(JSON.stringify(prev));
+      next.checklist[riderName][itemId] = value;
+      return next;
+    });
+  }, [riderName]);
 
-  const addSession = useCallback(
-    (session) => {
-      setState((prev) => {
-        const next = JSON.parse(JSON.stringify(prev));
-        next.training[riderName].push(session);
-        return next;
-      });
-    },
-    [riderName]
-  );
+  const addChecklistItem = useCallback((item) => {
+    setState((prev) => {
+      const next = JSON.parse(JSON.stringify(prev));
+      next.checklistItems[riderName].push(item);
+      next.checklist[riderName][item.id] = item.type === "tick" ? false : 0;
+      if (item.type === "count") next.checklistTargets[riderName][item.id] = item.max;
+      return next;
+    });
+  }, [riderName]);
 
-  const removeSession = useCallback(
-    (idx) => {
-      setState((prev) => {
-        const next = JSON.parse(JSON.stringify(prev));
-        const sorted = [...next.training[riderName]].sort((a, b) =>
-          b.date.localeCompare(a.date)
-        );
-        sorted.splice(idx, 1);
-        next.training[riderName] = sorted;
-        return next;
-      });
-    },
-    [riderName]
-  );
+  const deleteChecklistItem = useCallback((itemId) => {
+    setState((prev) => {
+      const next = JSON.parse(JSON.stringify(prev));
+      next.checklistItems[riderName] = next.checklistItems[riderName].filter((i) => i.id !== itemId);
+      delete next.checklist[riderName][itemId];
+      delete next.checklistTargets[riderName][itemId];
+      return next;
+    });
+  }, [riderName]);
 
-  const renameRider = useCallback(
-    (index, newName) => {
-      setState((prev) => {
-        const next = JSON.parse(JSON.stringify(prev));
-        const oldName = next.riderNames[index];
-        if (oldName === newName || !newName.trim()) return prev;
-        next.riderNames[index] = newName.trim();
-        next.checklist[newName.trim()] = next.checklist[oldName];
-        delete next.checklist[oldName];
-        next.training[newName.trim()] = next.training[oldName];
-        delete next.training[oldName];
-        return next;
-      });
-      setEditingName(null);
-    },
-    []
-  );
+  const editTarget = useCallback((itemId, newMax) => {
+    setState((prev) => {
+      const next = JSON.parse(JSON.stringify(prev));
+      next.checklistTargets[riderName][itemId] = newMax;
+      return next;
+    });
+  }, [riderName]);
+
+  const addSession = useCallback((session) => {
+    setState((prev) => {
+      const next = JSON.parse(JSON.stringify(prev));
+      next.training[riderName].push(session);
+      return next;
+    });
+  }, [riderName]);
+
+  const removeSession = useCallback((idx) => {
+    setState((prev) => {
+      const next = JSON.parse(JSON.stringify(prev));
+      const sorted = [...next.training[riderName]].sort((a, b) => b.date.localeCompare(a.date));
+      sorted.splice(idx, 1);
+      next.training[riderName] = sorted;
+      return next;
+    });
+  }, [riderName]);
+
+  const updateFlights = useCallback((flights) => {
+    setState((prev) => {
+      const next = JSON.parse(JSON.stringify(prev));
+      next.flights[riderName] = flights;
+      return next;
+    });
+  }, [riderName]);
+
+  const renameRider = useCallback((index, newName) => {
+    setState((prev) => {
+      const next = JSON.parse(JSON.stringify(prev));
+      const oldName = next.riderNames[index];
+      if (oldName === newName || !newName.trim()) return prev;
+      next.riderNames[index] = newName.trim();
+      for (const key of ["checklist", "checklistItems", "checklistTargets", "training", "flights"]) {
+        next[key][newName.trim()] = next[key][oldName];
+        delete next[key][oldName];
+      }
+      return next;
+    });
+    setEditingName(null);
+  }, []);
+
+  const tabs = hasFlight ? ["checklist", "training", "flights"] : ["checklist", "training"];
+  const tabLabels = { checklist: "Kit Checklist", training: "Training Log", flights: "Flights" };
 
   if (loading || !state) {
     return (
-      <div style={styles.loadingScreen}>
-        <div style={styles.spinner} />
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: T.bg }}>
+        <div style={s.spinner} />
       </div>
     );
   }
 
   return (
-    <div style={styles.root}>
-      {/* Grain overlay */}
-      <div style={styles.grain} />
-
+    <div style={s.root}>
       {/* Header */}
-      <header style={styles.header}>
-        <div style={styles.headerBadge}>GRAVEL</div>
-        <h1 style={styles.title}>Brisbane &rarr; Sunshine Coast</h1>
-        <p style={styles.subtitle}>6 June 2026 &middot; ~100km gravel</p>
+      <header style={s.header}>
+        <div style={s.headerBadge}>GRAVEL</div>
+        <h1 style={s.title}>Brisbane &rarr; Sunshine Coast</h1>
+        <p style={s.subtitle}>6 June 2026 &middot; 260km &middot; 3,650m elev</p>
       </header>
 
       {/* Countdown */}
-      <section style={styles.countdownSection}>
+      <section style={s.countdownSection}>
         <CountdownBlock countdown={countdown} />
       </section>
 
       {/* Rider tabs */}
-      <nav style={styles.riderNav}>
+      <nav style={s.riderNav}>
         {state.riderNames.map((r, i) => (
           <div key={i} style={{ position: "relative" }}>
             {editingName === i ? (
-              <input
-                autoFocus
-                defaultValue={r}
+              <input autoFocus defaultValue={r}
                 onBlur={(e) => renameRider(i, e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") renameRider(i, e.target.value);
                   if (e.key === "Escape") setEditingName(null);
                 }}
-                style={styles.nameInput}
-              />
+                style={s.nameInput} />
             ) : (
-              <button
-                onClick={() => setActiveRider(i)}
-                onDoubleClick={() => setEditingName(i)}
-                style={{
-                  ...styles.riderTab,
-                  ...(activeRider === i ? styles.riderTabActive : {}),
-                }}
-              >
+              <button onClick={() => setActiveRider(i)} onDoubleClick={() => setEditingName(i)}
+                style={{ ...s.riderTab, ...(activeRider === i ? s.riderTabActive : {}) }}>
                 {r}
               </button>
             )}
@@ -428,40 +625,36 @@ export default function GravelDashboard() {
       </nav>
 
       {/* Section tabs */}
-      <div style={styles.sectionTabs}>
-        {["checklist", "training"].map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            style={{
-              ...styles.sectionTab,
-              ...(tab === t ? styles.sectionTabActive : {}),
-            }}
-          >
-            {t === "checklist" ? "Kit Checklist" : "Training Log"}
+      <div style={s.sectionTabs}>
+        {tabs.map((t) => (
+          <button key={t} onClick={() => setTab(t)}
+            style={{ ...s.sectionTab, ...(tab === t ? s.sectionTabActive : {}) }}>
+            {tabLabels[t]}
           </button>
         ))}
       </div>
 
       {/* Content */}
-      <main style={styles.main}>
+      <main style={s.main}>
         {tab === "checklist" ? (
           <ChecklistPanel
             rider={riderName}
-            state={state.checklist[riderName] || {}}
+            items={state.checklistItems[riderName] || []}
+            targets={state.checklistTargets[riderName] || {}}
+            values={state.checklist[riderName] || {}}
             onChange={updateChecklist}
+            onDeleteItem={deleteChecklistItem}
+            onAddItem={addChecklistItem}
+            onEditTarget={editTarget}
           />
-        ) : (
-          <TrainingPanel
-            rider={riderName}
-            sessions={state.training[riderName] || []}
-            onAdd={addSession}
-            onRemove={removeSession}
-          />
-        )}
+        ) : tab === "training" ? (
+          <TrainingPanel rider={riderName} sessions={state.training[riderName] || []} onAdd={addSession} onRemove={removeSession} />
+        ) : tab === "flights" && hasFlight ? (
+          <FlightsPanel rider={riderName} flights={state.flights[riderName] || []} onUpdate={updateFlights} />
+        ) : null}
       </main>
-      <footer style={styles.footer}>
-        double-tap rider name to rename &middot; data persists across sessions
+      <footer style={s.footer}>
+        double-tap rider name to rename &middot; data saved locally
       </footer>
     </div>
   );
@@ -469,392 +662,173 @@ export default function GravelDashboard() {
 
 // --- Styles ---
 
-const FONT_DISPLAY = "'Oswald', sans-serif";
-const FONT_BODY = "'IBM Plex Mono', monospace";
-const BG = "#0f0f0f";
-const CARD_BG = "rgba(255,255,255,0.03)";
-const BORDER = "rgba(255,255,255,0.08)";
-const ACCENT = "#f97316";
-const TEXT = "#e5e5e5";
-const TEXT_DIM = "#777";
-
-const styles = {
+const s = {
   root: {
     fontFamily: FONT_BODY,
-    background: BG,
-    color: TEXT,
+    background: T.bg,
+    color: T.text,
     minHeight: "100vh",
     position: "relative",
-    overflow: "hidden",
     maxWidth: 640,
     margin: "0 auto",
     padding: "0 16px 40px",
   },
-  grain: {
-    position: "fixed",
-    inset: 0,
-    opacity: 0.04,
-    backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`,
-    backgroundSize: "128px",
-    pointerEvents: "none",
-    zIndex: 0,
-  },
-  loadingScreen: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    height: "100vh",
-    background: BG,
-  },
   spinner: {
-    width: 32,
-    height: 32,
-    border: `3px solid ${BORDER}`,
-    borderTopColor: ACCENT,
+    width: 32, height: 32,
+    border: `3px solid ${T.border}`,
+    borderTopColor: T.accent,
     borderRadius: "50%",
     animation: "spin 0.8s linear infinite",
   },
 
-  // Header
-  header: {
-    textAlign: "center",
-    paddingTop: 40,
-    position: "relative",
-    zIndex: 1,
-  },
+  header: { textAlign: "center", paddingTop: 40, position: "relative", zIndex: 1 },
   headerBadge: {
-    display: "inline-block",
-    fontFamily: FONT_DISPLAY,
-    fontSize: 11,
-    letterSpacing: 6,
-    color: ACCENT,
-    border: `1px solid ${ACCENT}`,
-    padding: "4px 16px",
-    marginBottom: 12,
+    display: "inline-block", fontFamily: FONT_DISPLAY, fontSize: 11,
+    letterSpacing: 6, color: T.accent, border: `1.5px solid ${T.accent}`,
+    padding: "4px 16px", marginBottom: 12, borderRadius: 2,
   },
   title: {
-    fontFamily: FONT_DISPLAY,
-    fontSize: "clamp(22px, 6vw, 32px)",
-    fontWeight: 700,
-    textTransform: "uppercase",
-    letterSpacing: 2,
-    margin: "8px 0 4px",
-    lineHeight: 1.1,
+    fontFamily: FONT_DISPLAY, fontSize: "clamp(22px, 6vw, 32px)", fontWeight: 700,
+    textTransform: "uppercase", letterSpacing: 2, margin: "8px 0 4px", lineHeight: 1.1, color: T.text,
   },
-  subtitle: {
-    fontSize: 12,
-    color: TEXT_DIM,
-    letterSpacing: 2,
-    textTransform: "uppercase",
-    margin: 0,
-  },
+  subtitle: { fontSize: 12, color: T.textDim, letterSpacing: 2, textTransform: "uppercase", margin: 0 },
 
-  // Countdown
-  countdownSection: {
-    margin: "32px 0 24px",
-    position: "relative",
-    zIndex: 1,
-  },
-  countdownRow: {
-    display: "flex",
-    justifyContent: "center",
-    gap: 4,
-  },
-  countdownUnit: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    minWidth: 56,
-  },
+  countdownSection: { margin: "28px 0 24px", position: "relative", zIndex: 1 },
+  countdownRow: { display: "flex", justifyContent: "center", gap: 4 },
+  countdownUnit: { display: "flex", flexDirection: "column", alignItems: "center", minWidth: 56 },
   countdownNumber: {
-    fontFamily: FONT_DISPLAY,
-    fontSize: "clamp(36px, 10vw, 56px)",
-    fontWeight: 700,
-    lineHeight: 1,
-    color: "#fff",
+    fontFamily: FONT_DISPLAY, fontSize: "clamp(36px, 10vw, 56px)", fontWeight: 700, lineHeight: 1, color: T.text,
   },
-  countdownLabel: {
-    fontSize: 9,
-    letterSpacing: 3,
-    color: TEXT_DIM,
-    marginTop: 4,
-  },
-  countdownSep: {
-    fontFamily: FONT_DISPLAY,
-    fontSize: "clamp(28px, 8vw, 44px)",
-    color: ACCENT,
-    marginTop: 2,
-    opacity: 0.6,
-  },
+  countdownLabel: { fontSize: 9, letterSpacing: 3, color: T.textMuted, marginTop: 4 },
+  countdownSep: { fontFamily: FONT_DISPLAY, fontSize: "clamp(28px, 8vw, 44px)", color: T.accent, marginTop: 2, opacity: 0.5 },
 
-  // Rider nav
-  riderNav: {
-    display: "flex",
-    gap: 8,
-    justifyContent: "center",
-    marginBottom: 8,
-    position: "relative",
-    zIndex: 1,
-  },
+  riderNav: { display: "flex", gap: 8, justifyContent: "center", marginBottom: 8, position: "relative", zIndex: 1 },
   riderTab: {
-    fontFamily: FONT_BODY,
-    fontSize: 12,
-    padding: "8px 20px",
-    background: "transparent",
-    border: `1px solid ${BORDER}`,
-    color: TEXT_DIM,
-    cursor: "pointer",
-    letterSpacing: 1,
-    transition: "all 0.2s",
+    fontFamily: FONT_BODY, fontSize: 12, padding: "8px 20px", background: "transparent",
+    border: `1px solid ${T.border}`, color: T.textDim, cursor: "pointer", letterSpacing: 1,
+    transition: "all 0.2s", borderRadius: 4,
   },
-  riderTabActive: {
-    color: "#fff",
-    borderColor: ACCENT,
-    background: "rgba(249,115,22,0.08)",
-  },
+  riderTabActive: { color: T.accent, borderColor: T.accent, background: T.accentLight, fontWeight: 600 },
   nameInput: {
-    fontFamily: FONT_BODY,
-    fontSize: 12,
-    padding: "8px 12px",
-    background: "rgba(249,115,22,0.1)",
-    border: `1px solid ${ACCENT}`,
-    color: "#fff",
-    outline: "none",
-    width: 100,
-    letterSpacing: 1,
+    fontFamily: FONT_BODY, fontSize: 12, padding: "8px 12px", background: T.accentLight,
+    border: `1px solid ${T.accent}`, color: T.text, outline: "none", width: 100, letterSpacing: 1, borderRadius: 4,
   },
 
-  // Section tabs
   sectionTabs: {
-    display: "flex",
-    gap: 0,
-    margin: "8px 0 16px",
-    borderBottom: `1px solid ${BORDER}`,
-    position: "relative",
-    zIndex: 1,
+    display: "flex", gap: 0, margin: "8px 0 16px", borderBottom: `1px solid ${T.border}`, position: "relative", zIndex: 1,
   },
   sectionTab: {
-    fontFamily: FONT_BODY,
-    fontSize: 11,
-    letterSpacing: 2,
-    textTransform: "uppercase",
-    padding: "12px 20px",
-    background: "transparent",
-    border: "none",
-    borderBottom: "2px solid transparent",
-    color: TEXT_DIM,
-    cursor: "pointer",
-    transition: "all 0.2s",
-    flex: 1,
+    fontFamily: FONT_BODY, fontSize: 11, letterSpacing: 2, textTransform: "uppercase",
+    padding: "12px 16px", background: "transparent", border: "none",
+    borderBottom: "2px solid transparent", color: T.textDim, cursor: "pointer", transition: "all 0.2s", flex: 1,
   },
-  sectionTabActive: {
-    color: ACCENT,
-    borderBottomColor: ACCENT,
-  },
+  sectionTabActive: { color: T.accent, borderBottomColor: T.accent },
 
-  main: {
-    position: "relative",
-    zIndex: 1,
+  main: { position: "relative", zIndex: 1 },
+
+  // Shared form elements
+  formInput: {
+    fontFamily: FONT_BODY, fontSize: 12, padding: "8px 10px",
+    background: T.white, border: `1px solid ${T.border}`, color: T.text,
+    borderRadius: 4, outline: "none", minWidth: 0,
+  },
+  primaryBtn: {
+    fontFamily: FONT_BODY, fontSize: 12, padding: "8px 16px",
+    background: T.accent, color: T.white, border: "none", borderRadius: 4,
+    cursor: "pointer", fontWeight: 600, letterSpacing: 0.5,
+  },
+  ghostBtn: {
+    fontFamily: FONT_BODY, fontSize: 12, padding: "8px 16px",
+    background: "transparent", color: T.textDim, border: `1px solid ${T.border}`, borderRadius: 4,
+    cursor: "pointer",
+  },
+  deleteBtn: {
+    background: "transparent", border: "none", color: T.textMuted, fontSize: 18,
+    cursor: "pointer", padding: "0 4px", lineHeight: 1, transition: "color 0.15s",
+  },
+  addItemBtn: {
+    fontFamily: FONT_BODY, fontSize: 12, padding: "10px 0", width: "100%",
+    background: T.accentLight, color: T.accent, border: `1px dashed ${T.accentBorder}`,
+    borderRadius: 4, cursor: "pointer", letterSpacing: 1, fontWeight: 500,
+  },
+  addItemForm: {
+    padding: 12, background: T.white, border: `1px solid ${T.border}`,
+    borderRadius: 6, marginBottom: 12, display: "flex", flexDirection: "column", gap: 8,
   },
 
   // Checklist
-  checklistCard: {},
   progressBarOuter: {
-    position: "relative",
-    height: 28,
-    background: "rgba(255,255,255,0.04)",
-    borderRadius: 2,
-    overflow: "hidden",
-    marginBottom: 16,
-    border: `1px solid ${BORDER}`,
+    position: "relative", height: 28, background: T.borderLight, borderRadius: 6,
+    overflow: "hidden", marginBottom: 12, border: `1px solid ${T.border}`,
   },
-  progressBarInner: {
-    height: "100%",
-    transition: "width 0.4s ease, background 0.4s ease",
-    borderRadius: 2,
-  },
+  progressBarInner: { height: "100%", transition: "width 0.4s ease, background 0.4s ease", borderRadius: 6 },
   progressText: {
-    position: "absolute",
-    top: "50%",
-    left: "50%",
-    transform: "translate(-50%, -50%)",
-    fontSize: 10,
-    letterSpacing: 2,
-    fontWeight: 600,
-    color: "#fff",
-    textShadow: "0 1px 4px rgba(0,0,0,0.8)",
+    position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
+    fontSize: 10, letterSpacing: 2, fontWeight: 600, color: T.text,
   },
-  checklistGrid: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 2,
-  },
+  checklistGrid: { display: "flex", flexDirection: "column", gap: 2 },
   checklistItem: {
-    display: "flex",
-    alignItems: "center",
-    gap: 12,
-    padding: "8px 12px",
-    background: CARD_BG,
-    borderRadius: 2,
-    border: `1px solid ${BORDER}`,
-    transition: "background 0.15s",
+    display: "flex", alignItems: "center", gap: 10, padding: "8px 12px",
+    background: T.white, borderRadius: 4, border: `1px solid ${T.borderLight}`, transition: "background 0.15s",
   },
   tickBtn: {
-    width: 28,
-    height: 28,
-    minWidth: 28,
-    border: "1px solid",
-    borderRadius: 2,
-    cursor: "pointer",
-    fontSize: 16,
-    fontWeight: 700,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    transition: "all 0.2s",
-    fontFamily: "system-ui",
+    width: 26, height: 26, minWidth: 26, border: "1.5px solid", borderRadius: 4,
+    cursor: "pointer", fontSize: 14, fontWeight: 700, display: "flex",
+    alignItems: "center", justifyContent: "center", transition: "all 0.2s", fontFamily: "system-ui",
   },
-  counterGroup: {
-    display: "flex",
-    alignItems: "center",
-    gap: 2,
-  },
+  counterGroup: { display: "flex", alignItems: "center", gap: 2 },
   counterBtn: {
-    width: 26,
-    height: 26,
-    background: "rgba(255,255,255,0.06)",
-    border: `1px solid ${BORDER}`,
-    color: TEXT,
-    borderRadius: 2,
-    cursor: "pointer",
-    fontSize: 16,
-    fontFamily: "system-ui",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
+    width: 26, height: 26, background: T.bgCard, border: `1px solid ${T.border}`,
+    color: T.text, borderRadius: 4, cursor: "pointer", fontSize: 16, fontFamily: "system-ui",
+    display: "flex", alignItems: "center", justifyContent: "center",
   },
-  counterVal: {
-    fontFamily: FONT_DISPLAY,
-    fontSize: 16,
-    minWidth: 20,
-    textAlign: "center",
-    color: "#fff",
-  },
-  checklistLabel: {
-    fontSize: 13,
-    letterSpacing: 0.3,
-    transition: "all 0.2s",
-  },
-  maxLabel: {
-    color: TEXT_DIM,
-    fontSize: 11,
-  },
+  counterVal: { fontFamily: FONT_DISPLAY, fontSize: 16, minWidth: 20, textAlign: "center", color: T.text },
+  checklistLabel: { fontSize: 13, letterSpacing: 0.3, transition: "all 0.2s" },
+  targetLabel: { color: T.textMuted, fontSize: 11, cursor: "pointer", borderBottom: `1px dashed ${T.textMuted}` },
 
   // Training
-  trainingCard: {},
   trainingHeader: {
-    textAlign: "center",
-    marginBottom: 16,
-    padding: "20px 0",
-    background: CARD_BG,
-    border: `1px solid ${BORDER}`,
-    borderRadius: 2,
+    textAlign: "center", marginBottom: 16, padding: "20px 0",
+    background: T.white, border: `1px solid ${T.borderLight}`, borderRadius: 6,
   },
-  trainingTotal: {
-    fontFamily: FONT_DISPLAY,
-    fontSize: 52,
-    fontWeight: 700,
-    color: "#fff",
-    lineHeight: 1,
-  },
+  trainingTotal: { fontFamily: FONT_DISPLAY, fontSize: 52, fontWeight: 700, color: T.text, lineHeight: 1 },
   trainingTotalLabel: {
-    display: "block",
-    fontSize: 10,
-    letterSpacing: 3,
-    textTransform: "uppercase",
-    color: TEXT_DIM,
-    marginTop: 6,
+    display: "block", fontSize: 10, letterSpacing: 3, textTransform: "uppercase", color: T.textMuted, marginTop: 6,
   },
-  trainingInputRow: {
-    display: "flex",
-    gap: 6,
-    marginBottom: 12,
-    flexWrap: "wrap",
-  },
-  input: {
-    fontFamily: FONT_BODY,
-    fontSize: 12,
-    padding: "8px 10px",
-    background: "rgba(255,255,255,0.04)",
-    border: `1px solid ${BORDER}`,
-    color: TEXT,
-    borderRadius: 2,
-    outline: "none",
-    minWidth: 0,
-  },
-  addBtn: {
-    fontFamily: FONT_DISPLAY,
-    fontSize: 20,
-    width: 38,
-    height: 38,
-    background: ACCENT,
-    color: "#000",
-    border: "none",
-    borderRadius: 2,
-    cursor: "pointer",
-    fontWeight: 700,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  sessionList: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 2,
-  },
+  trainingInputRow: { display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" },
+  sessionList: { display: "flex", flexDirection: "column", gap: 2 },
   sessionRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: 12,
-    padding: "8px 12px",
-    background: CARD_BG,
-    border: `1px solid ${BORDER}`,
-    borderRadius: 2,
-    fontSize: 12,
+    display: "flex", alignItems: "center", gap: 12, padding: "8px 12px",
+    background: T.white, border: `1px solid ${T.borderLight}`, borderRadius: 4, fontSize: 12,
   },
-  sessionDate: {
-    color: TEXT_DIM,
-    minWidth: 90,
+  sessionDate: { color: T.textDim, minWidth: 90 },
+  sessionHrs: { fontFamily: FONT_DISPLAY, color: T.accent, minWidth: 36, fontWeight: 600 },
+  sessionNote: { color: T.text, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+
+  // Flights
+  flightCard: {
+    padding: 14, background: T.white, border: `1px solid ${T.borderLight}`,
+    borderRadius: 6, marginBottom: 6,
   },
-  sessionHrs: {
-    fontFamily: FONT_DISPLAY,
-    color: ACCENT,
-    minWidth: 36,
-    fontWeight: 600,
+  flightSectionLabel: {
+    fontFamily: FONT_DISPLAY, fontSize: 12, letterSpacing: 3, textTransform: "uppercase",
+    color: T.textMuted, marginBottom: 8,
   },
-  sessionNote: {
-    color: TEXT,
-    flex: 1,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
+  flightForm: {
+    padding: 14, background: T.white, border: `1px solid ${T.border}`,
+    borderRadius: 6, marginTop: 8,
   },
-  removeBtn: {
-    background: "transparent",
-    border: "none",
-    color: "#555",
-    fontSize: 18,
-    cursor: "pointer",
-    padding: "0 4px",
+  formGrid: {
+    display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6,
   },
+  dirBtn: {
+    fontFamily: FONT_BODY, fontSize: 11, padding: "6px 14px", background: "transparent",
+    border: `1px solid ${T.border}`, color: T.textDim, borderRadius: 4, cursor: "pointer",
+    textTransform: "capitalize", letterSpacing: 0.5,
+  },
+  dirBtnActive: { color: T.accent, borderColor: T.accent, background: T.accentLight },
 
   footer: {
-    textAlign: "center",
-    fontSize: 10,
-    color: "#444",
-    letterSpacing: 1,
-    marginTop: 32,
-    position: "relative",
-    zIndex: 1,
+    textAlign: "center", fontSize: 10, color: T.textMuted, letterSpacing: 1, marginTop: 32, position: "relative", zIndex: 1,
   },
 };

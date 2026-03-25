@@ -4,10 +4,6 @@
   to { transform: rotate(360deg); }
 }
 
-input[type=date]::-webkit-calendar-picker-indicator {
-  filter: invert(0.7);
-}
-
 * {
   box-sizing: border-box;
   margin: 0;
@@ -15,5 +11,5 @@ input[type=date]::-webkit-calendar-picker-indicator {
 }
 
 body {
-  background: #0f0f0f;
+  background: #f5f3ef;
 }
