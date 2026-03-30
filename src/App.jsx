@@ -6,92 +6,153 @@ const RIDE_DATE = new Date("2026-06-06T05:00:00+10:00");
 const RIDERS = ["Jeffrey", "Andrew", "Gus"];
 const RIDERS_WITH_FLIGHTS = ["Jeffrey", "Gus"];
 
-const DEFAULT_CHECKLIST = [
+const POWER_METER_COST = 1060.99;
+
+const DEFAULT_PURCHASES = [
   { id: "bike_service", label: "Bike service / tune-up", type: "tick" },
-  { id: "tyre_sealant", label: "Tyre sealant refreshed", type: "tick" },
   { id: "spare_tubes", label: "Spare tubes", type: "count", max: 3 },
   { id: "co2_carts", label: "CO\u2082 cartridges", type: "count", max: 4 },
   { id: "tyre_plugs", label: "Tyre plug kit", type: "tick" },
   { id: "multi_tool", label: "Multi-tool", type: "tick" },
   { id: "chain_link", label: "Quick chain link", type: "tick" },
-  { id: "bottles", label: "Bottles / hydration", type: "count", max: 3 },
   { id: "electrolytes", label: "Electrolyte tabs", type: "count", max: 10 },
   { id: "gels", label: "Gels / bars", type: "count", max: 12 },
+  { id: "sunscreen", label: "Sunscreen", type: "tick" },
+  { id: "first_aid", label: "First aid basics", type: "tick" },
+  { id: "pump", label: "Mini pump", type: "tick" },
+];
+
+const DEFAULT_PACKING = [
+  { id: "tyre_sealant", label: "Tyre sealant refreshed", type: "tick" },
+  { id: "bottles", label: "Bottles / hydration", type: "count", max: 3 },
   { id: "lights_front", label: "Front light charged", type: "tick" },
   { id: "lights_rear", label: "Rear light charged", type: "tick" },
   { id: "helmet", label: "Helmet", type: "tick" },
   { id: "gloves", label: "Gloves", type: "tick" },
   { id: "kit_layers", label: "Kit / layers packed", type: "tick" },
-  { id: "sunscreen", label: "Sunscreen", type: "tick" },
   { id: "phone_charged", label: "Phone charged + mount", type: "tick" },
   { id: "garmin_charged", label: "GPS / Garmin charged", type: "tick" },
   { id: "route_loaded", label: "Route loaded on device", type: "tick" },
   { id: "cash_card", label: "Cash / card for stops", type: "tick" },
-  { id: "first_aid", label: "First aid basics", type: "tick" },
-  { id: "pump", label: "Mini pump", type: "tick" },
 ];
 
-const STORAGE_KEY = "gravel-dash-v2";
+const ALL_DEFAULTS = [...DEFAULT_PURCHASES, ...DEFAULT_PACKING];
+
+const STORAGE_KEY = "gravel-dash-v3";
 
 function getDefaultState() {
   const checklist = {};
-  const checklistItems = {};
+  const purchaseItems = {};
+  const packingItems = {};
   const checklistTargets = {};
   const training = {};
   const flights = {};
   RIDERS.forEach((r) => {
     checklist[r] = {};
-    checklistItems[r] = DEFAULT_CHECKLIST.map((item) => ({ ...item }));
+    purchaseItems[r] = DEFAULT_PURCHASES.map((item) => ({ ...item }));
+    packingItems[r] = DEFAULT_PACKING.map((item) => ({ ...item }));
     checklistTargets[r] = {};
-    DEFAULT_CHECKLIST.forEach((item) => {
+    ALL_DEFAULTS.forEach((item) => {
       checklist[r][item.id] = item.type === "tick" ? false : 0;
       if (item.type === "count") checklistTargets[r][item.id] = item.max;
     });
     training[r] = [];
     flights[r] = [];
   });
-  return { checklist, checklistItems, checklistTargets, training, flights, riderNames: [...RIDERS] };
+  return { checklist, purchaseItems, packingItems, checklistTargets, training, flights, riderNames: [...RIDERS], powerMeterSaved: 0 };
 }
 
 function migrateState(parsed) {
-  // Migrate from v1 format
-  if (!parsed.checklistItems) {
-    parsed.checklistItems = {};
+  // Migrate from v2/v1: split single checklistItems into purchases + packing
+  if (parsed.checklistItems && !parsed.purchaseItems) {
+    parsed.purchaseItems = {};
+    parsed.packingItems = {};
+    const purchaseIds = new Set(DEFAULT_PURCHASES.map((i) => i.id));
+    const packingIds = new Set(DEFAULT_PACKING.map((i) => i.id));
+    (parsed.riderNames || RIDERS).forEach((r) => {
+      const items = parsed.checklistItems[r] || [];
+      parsed.purchaseItems[r] = [];
+      parsed.packingItems[r] = [];
+      items.forEach((item) => {
+        if (purchaseIds.has(item.id)) {
+          parsed.purchaseItems[r].push(item);
+        } else if (packingIds.has(item.id)) {
+          parsed.packingItems[r].push(item);
+        } else {
+          // Custom items go to packing by default
+          parsed.packingItems[r].push(item);
+        }
+      });
+      // Add any defaults that weren't in the old list
+      DEFAULT_PURCHASES.forEach((d) => {
+        if (!parsed.purchaseItems[r].find((i) => i.id === d.id)) {
+          parsed.purchaseItems[r].push({ ...d });
+        }
+      });
+      DEFAULT_PACKING.forEach((d) => {
+        if (!parsed.packingItems[r].find((i) => i.id === d.id)) {
+          parsed.packingItems[r].push({ ...d });
+        }
+      });
+    });
+    delete parsed.checklistItems;
+  }
+  if (!parsed.purchaseItems) {
+    parsed.purchaseItems = {};
+    parsed.packingItems = {};
+    (parsed.riderNames || RIDERS).forEach((r) => {
+      parsed.purchaseItems[r] = DEFAULT_PURCHASES.map((item) => ({ ...item }));
+      parsed.packingItems[r] = DEFAULT_PACKING.map((item) => ({ ...item }));
+    });
+  }
+  if (!parsed.checklistTargets) {
     parsed.checklistTargets = {};
     (parsed.riderNames || RIDERS).forEach((r) => {
-      parsed.checklistItems[r] = DEFAULT_CHECKLIST.map((item) => ({ ...item }));
       parsed.checklistTargets[r] = {};
-      DEFAULT_CHECKLIST.forEach((item) => {
-        if (item.type === "count") {
-          parsed.checklistTargets[r][item.id] = item.max;
-        }
+      ALL_DEFAULTS.forEach((item) => {
+        if (item.type === "count") parsed.checklistTargets[r][item.id] = item.max;
       });
     });
   }
   if (!parsed.flights) {
     parsed.flights = {};
-    (parsed.riderNames || RIDERS).forEach((r) => {
-      parsed.flights[r] = [];
-    });
+    (parsed.riderNames || RIDERS).forEach((r) => { parsed.flights[r] = []; });
   }
+  if (parsed.powerMeterSaved === undefined) parsed.powerMeterSaved = 0;
   return parsed;
 }
 
-// Debounced save
-function useDebouncedSave(state, delay = 800) {
+// Save immediately + debounced
+function useSave(state) {
   const timer = useRef(null);
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
+  const flushSave = useCallback(() => {
+    if (!stateRef.current) return;
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(stateRef.current));
+    } catch (e) {
+      console.error("Save failed:", e);
+    }
+  }, []);
+
   useEffect(() => {
     if (!state) return;
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => {
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-      } catch (e) {
-        console.error("Save failed:", e);
-      }
-    }, delay);
+    timer.current = setTimeout(flushSave, 400);
     return () => clearTimeout(timer.current);
-  }, [state, delay]);
+  }, [state, flushSave]);
+
+  // Save on page unload
+  useEffect(() => {
+    const handler = () => flushSave();
+    window.addEventListener("beforeunload", handler);
+    window.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") flushSave();
+    });
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [flushSave]);
 }
 
 function useCountdown(target) {
@@ -124,8 +185,13 @@ const T = {
   green: "#2d8a4e",
   greenBg: "rgba(45,138,78,0.1)",
   yellow: "#b58a1b",
+  yellowBg: "rgba(181,138,27,0.08)",
+  yellowBorder: "rgba(181,138,27,0.25)",
   red: "#c43e2a",
   white: "#ffffff",
+  electric: "#3b82f6",
+  electricLight: "rgba(59,130,246,0.08)",
+  electricBorder: "rgba(59,130,246,0.2)",
 };
 
 const FONT_DISPLAY = "'Oswald', sans-serif";
@@ -157,12 +223,90 @@ function CountdownBlock({ countdown }) {
   );
 }
 
+function PowerMeterTracker({ saved, onUpdate }) {
+  const [editing, setEditing] = useState(false);
+  const [inputVal, setInputVal] = useState("");
+  const pct = Math.min(100, Math.round((saved / POWER_METER_COST) * 100));
+  const remaining = Math.max(0, POWER_METER_COST - saved);
+
+  const handleSave = () => {
+    const val = parseFloat(inputVal);
+    if (!isNaN(val) && val >= 0) onUpdate(val);
+    setEditing(false);
+  };
+
+  return (
+    <div style={s.powerCard}>
+      <div style={s.powerHeader}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" style={{ marginRight: 8, flexShrink: 0 }}>
+          <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill={T.electric} opacity="0.15" stroke={T.electric} strokeWidth="2" strokeLinejoin="round" />
+        </svg>
+        <span style={s.powerTitle}>Andrew's Power Meter Pedals</span>
+        <span style={s.powerCost}>${POWER_METER_COST.toFixed(2)}</span>
+      </div>
+      <div style={s.powerBarOuter}>
+        <div style={{
+          ...s.powerBarInner,
+          width: `${pct}%`,
+          background: pct >= 100
+            ? `linear-gradient(90deg, ${T.green}, #34d399)`
+            : `linear-gradient(90deg, ${T.electric}, #60a5fa)`,
+        }}>
+          {pct >= 100 && (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)" }}>
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="#fff" opacity="0.5" />
+            </svg>
+          )}
+        </div>
+        <span style={s.powerBarText}>
+          {pct >= 100 ? "FULLY CHARGED!" : `$${saved.toFixed(0)} / $${POWER_METER_COST.toFixed(0)}`}
+        </span>
+        {/* Lightning bolt decorations */}
+        {[15, 35, 55, 75, 90].map((pos) => (
+          <svg key={pos} width="10" height="10" viewBox="0 0 24 24" fill="none"
+            style={{ position: "absolute", left: `${pos}%`, top: "50%", transform: "translateY(-50%)", opacity: pos < pct ? 0.3 : 0.08, pointerEvents: "none" }}>
+            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill={pos < pct ? "#fff" : T.electric} />
+          </svg>
+        ))}
+      </div>
+      <div style={s.powerFooter}>
+        {editing ? (
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <span style={{ fontSize: 12, color: T.textDim }}>$</span>
+            <input
+              autoFocus
+              type="number"
+              step="0.01"
+              min="0"
+              placeholder="Amount saved"
+              value={inputVal}
+              onChange={(e) => setInputVal(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") handleSave(); if (e.key === "Escape") setEditing(false); }}
+              style={{ ...s.formInput, width: 110, fontSize: 12 }}
+            />
+            <button onClick={handleSave} style={s.primaryBtnSmall}>Save</button>
+            <button onClick={() => setEditing(false)} style={s.ghostBtnSmall}>Cancel</button>
+          </div>
+        ) : (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
+            <span style={{ fontSize: 11, color: T.textDim }}>
+              {pct >= 100 ? "Ready to order!" : `$${remaining.toFixed(2)} to go`}
+            </span>
+            <button onClick={() => { setInputVal(String(saved || "")); setEditing(true); }} style={s.powerEditBtn}>
+              Update savings
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function RoutePanel() {
   const W = 608;
   const MAP_H = 180;
   const ELEV_H = 100;
 
-  // Build route SVG path
   const routePath = useMemo(() => {
     if (!routeCoords.length) return "";
     const lats = routeCoords.map((c) => c[0]);
@@ -181,17 +325,15 @@ function RoutePanel() {
       .join(" ");
   }, []);
 
-  // Build elevation SVG
   const { elevPath, elevFill, elevLabels } = useMemo(() => {
     if (!elevationProfile.length) return { elevPath: "", elevFill: "", elevLabels: [] };
     const maxD = elevationProfile[elevationProfile.length - 1].d;
     const minE = Math.min(...elevationProfile.map((p) => p.e));
     const maxE = Math.max(...elevationProfile.map((p) => p.e));
-    const pad = 0;
     const w = W, h = ELEV_H;
     const pts = elevationProfile.map((p) => {
-      const x = pad + (p.d / maxD) * (w - pad * 2);
-      const y = h - pad - ((p.e - minE) / (maxE - minE)) * (h - pad * 2 - 8);
+      const x = (p.d / maxD) * w;
+      const y = h - ((p.e - minE) / (maxE - minE)) * (h - 8);
       return { x, y };
     });
     const path = pts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
@@ -200,7 +342,6 @@ function RoutePanel() {
       { text: `${minE.toFixed(0)}m`, x: 4, y: h - 4 },
       { text: `${maxE.toFixed(0)}m`, x: 4, y: 12 },
     ];
-    // Distance markers
     for (let km = 50; km < maxD / 1000; km += 50) {
       const x = (km / (maxD / 1000)) * w;
       labels.push({ text: `${km}km`, x, y: h - 4, anchor: "middle" });
@@ -210,20 +351,15 @@ function RoutePanel() {
 
   return (
     <div style={s.routePanel}>
-      {/* Route map */}
       <div style={s.routeMapWrap}>
         <svg width="100%" viewBox={`0 0 ${W} ${MAP_H}`} style={{ display: "block" }}>
-          {/* Grid dots */}
           {Array.from({ length: 8 }).map((_, row) =>
             Array.from({ length: 16 }).map((_, col) => (
               <circle key={`${row}-${col}`} cx={col * (W / 15)} cy={row * (MAP_H / 7)} r="0.6" fill={T.border} />
             ))
           )}
-          {/* Route line shadow */}
           <path d={routePath} fill="none" stroke={T.accent} strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" opacity="0.15" />
-          {/* Route line */}
           <path d={routePath} fill="none" stroke={T.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-          {/* Start dot */}
           {routeCoords.length > 0 && (() => {
             const lats = routeCoords.map(c => c[0]), lons = routeCoords.map(c => c[1]);
             const minLat = Math.min(...lats), maxLat = Math.max(...lats);
@@ -243,35 +379,32 @@ function RoutePanel() {
         </svg>
         <div style={s.routeLabels}>
           <span style={s.routeLabelStart}>Brisbane</span>
-          <span style={s.routeLabelEnd}>Sunshine Coast</span>
+          <a href="https://hatchedchicken.com.au/" target="_blank" rel="noopener noreferrer" style={s.routeLabelEnd}>
+            <img src="https://hatchedchicken.com.au/wp-content/uploads/2025/10/logo-sandhat.png" alt="Hatched Chicken" style={{ height: 18, marginRight: 5, verticalAlign: "middle", borderRadius: 2 }} />
+            Hatched Chicken
+          </a>
         </div>
       </div>
 
-      {/* Elevation profile */}
       <div style={s.elevWrap}>
         <div style={{ fontFamily: FONT_DISPLAY, fontSize: 9, letterSpacing: 3, textTransform: "uppercase", color: T.textMuted, marginBottom: 6 }}>
           Elevation Profile
         </div>
         <svg width="100%" viewBox={`0 0 ${W} ${ELEV_H}`} style={{ display: "block" }}>
-          {/* Fill */}
           <path d={elevFill} fill="url(#elevGrad)" />
-          {/* Line */}
           <path d={elevPath} fill="none" stroke={T.accent} strokeWidth="1.5" strokeLinejoin="round" />
-          {/* Gradient def */}
           <defs>
             <linearGradient id="elevGrad" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={T.accent} stopOpacity="0.2" />
               <stop offset="100%" stopColor={T.accent} stopOpacity="0.02" />
             </linearGradient>
           </defs>
-          {/* Labels */}
           {elevLabels.map((l, i) => (
             <text key={i} x={l.x} y={l.y} fontSize="8" fontFamily={FONT_BODY} fill={T.textMuted} textAnchor={l.anchor || "start"}>{l.text}</text>
           ))}
         </svg>
       </div>
 
-      {/* Stats row */}
       <div style={s.statsRow}>
         <div style={s.statItem}>
           <span style={s.statValue}>260</span>
@@ -324,12 +457,12 @@ function FlightsPanel({ rider, flights, onUpdate }) {
       <div style={{ display: "flex", gap: 24, marginTop: 10, fontSize: 12 }}>
         <div>
           <div style={{ color: T.textMuted, fontSize: 9, letterSpacing: 2, textTransform: "uppercase" }}>Depart</div>
-          <div style={{ color: T.text, fontWeight: 500 }}>{f.depart || "—"}</div>
+          <div style={{ color: T.text, fontWeight: 500 }}>{f.depart || "\u2014"}</div>
         </div>
         <div style={{ color: T.textMuted, alignSelf: "center", fontSize: 16 }}>&rarr;</div>
         <div>
           <div style={{ color: T.textMuted, fontSize: 9, letterSpacing: 2, textTransform: "uppercase" }}>Arrive</div>
-          <div style={{ color: T.text, fontWeight: 500 }}>{f.arrive || "—"}</div>
+          <div style={{ color: T.text, fontWeight: 500 }}>{f.arrive || "\u2014"}</div>
         </div>
       </div>
       {f.conf && (
@@ -440,12 +573,14 @@ function TrainingPanel({ rider, sessions, onAdd, onRemove }) {
   );
 }
 
-function ChecklistPanel({ rider, items, targets, values, onChange, onDeleteItem, onAddItem, onEditTarget }) {
+function ChecklistPanel({ title, items, targets, values, onChange, onDeleteItem, onAddItem, onEditTarget, onEditItemLabel }) {
   const [newLabel, setNewLabel] = useState("");
   const [newType, setNewType] = useState("tick");
   const [newMax, setNewMax] = useState(3);
   const [showAdd, setShowAdd] = useState(false);
   const [editingTarget, setEditingTarget] = useState(null);
+  const [editingLabel, setEditingLabel] = useState(null);
+  const [editLabelVal, setEditLabelVal] = useState("");
 
   const total = items.length;
   const done = items.filter((item) => {
@@ -465,9 +600,18 @@ function ChecklistPanel({ rider, items, targets, values, onChange, onDeleteItem,
     setShowAdd(false);
   };
 
+  const handleLabelSave = (itemId) => {
+    if (editLabelVal.trim()) {
+      onEditItemLabel(itemId, editLabelVal.trim());
+    }
+    setEditingLabel(null);
+  };
+
   return (
-    <div>
-      {/* Add item button */}
+    <div style={{ marginBottom: 20 }}>
+      <div style={s.checklistSectionTitle}>{title}</div>
+
+      {/* Add item */}
       {showAdd ? (
         <div style={s.addItemForm}>
           <input placeholder="Item name" value={newLabel} onChange={(e) => setNewLabel(e.target.value)}
@@ -490,7 +634,7 @@ function ChecklistPanel({ rider, items, targets, values, onChange, onDeleteItem,
           </div>
         </div>
       ) : (
-        <button onClick={() => setShowAdd(true)} style={{ ...s.addItemBtn, marginBottom: 12 }}>+ Add item</button>
+        <button onClick={() => setShowAdd(true)} style={{ ...s.addItemBtn, marginBottom: 8 }}>+ Add item</button>
       )}
 
       {/* Progress bar */}
@@ -531,8 +675,28 @@ function ChecklistPanel({ rider, items, targets, values, onChange, onDeleteItem,
                 opacity: (item.type === "tick" && values[item.id]) || (item.type === "count" && values[item.id] > 0) ? 0.45 : 1,
                 textDecoration: (item.type === "tick" && values[item.id]) || (item.type === "count" && values[item.id] >= target) ? "line-through" : "none",
               }}>
-                {item.label}
-                {item.type === "count" && (
+                {editingLabel === item.id ? (
+                  <input
+                    autoFocus
+                    value={editLabelVal}
+                    onChange={(e) => setEditLabelVal(e.target.value)}
+                    onBlur={() => handleLabelSave(item.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleLabelSave(item.id);
+                      if (e.key === "Escape") setEditingLabel(null);
+                    }}
+                    style={{ ...s.formInput, padding: "2px 6px", fontSize: 12, width: "100%" }}
+                  />
+                ) : (
+                  <span
+                    onDoubleClick={() => { setEditingLabel(item.id); setEditLabelVal(item.label); }}
+                    title="Double-tap to edit"
+                    style={{ cursor: "default" }}
+                  >
+                    {item.label}
+                  </span>
+                )}
+                {item.type === "count" && editingLabel !== item.id && (
                   editingTarget === item.id ? (
                     <input
                       autoFocus
@@ -570,12 +734,12 @@ export default function GravelDashboard() {
   const [editingName, setEditingName] = useState(null);
   const countdown = useCountdown(RIDE_DATE.getTime());
 
-  useDebouncedSave(state);
+  useSave(state);
 
   useEffect(() => {
     try {
-      // Try v2 first, then fall back to v1
       let raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) raw = localStorage.getItem("gravel-dash-v2");
       if (!raw) raw = localStorage.getItem("gravel-dash-v1");
       if (raw) {
         const parsed = migrateState(JSON.parse(raw));
@@ -583,39 +747,28 @@ export default function GravelDashboard() {
         // Rename "Rider 3" to "Gus" if migrating
         const r3idx = parsed.riderNames.indexOf("Rider 3");
         if (r3idx !== -1) {
-          parsed.riderNames[r3idx] = "Gus";
-          if (parsed.checklist["Rider 3"]) {
-            parsed.checklist["Gus"] = parsed.checklist["Rider 3"];
-            delete parsed.checklist["Rider 3"];
-          }
-          if (parsed.training["Rider 3"]) {
-            parsed.training["Gus"] = parsed.training["Rider 3"];
-            delete parsed.training["Rider 3"];
-          }
-          if (parsed.checklistItems["Rider 3"]) {
-            parsed.checklistItems["Gus"] = parsed.checklistItems["Rider 3"];
-            delete parsed.checklistItems["Rider 3"];
-          }
-          if (parsed.checklistTargets["Rider 3"]) {
-            parsed.checklistTargets["Gus"] = parsed.checklistTargets["Rider 3"];
-            delete parsed.checklistTargets["Rider 3"];
-          }
-          if (parsed.flights["Rider 3"]) {
-            parsed.flights["Gus"] = parsed.flights["Rider 3"];
-            delete parsed.flights["Rider 3"];
+          const oldName = "Rider 3";
+          const newName = "Gus";
+          parsed.riderNames[r3idx] = newName;
+          for (const key of ["checklist", "purchaseItems", "packingItems", "checklistTargets", "training", "flights"]) {
+            if (parsed[key] && parsed[key][oldName]) {
+              parsed[key][newName] = parsed[key][oldName];
+              delete parsed[key][oldName];
+            }
           }
         }
         // Ensure all riders have entries
         parsed.riderNames.forEach((r) => {
           if (!parsed.checklist[r]) parsed.checklist[r] = {};
-          if (!parsed.checklistItems[r]) parsed.checklistItems[r] = DEFAULT_CHECKLIST.map((item) => ({ ...item }));
+          if (!parsed.purchaseItems[r]) parsed.purchaseItems[r] = DEFAULT_PURCHASES.map((item) => ({ ...item }));
+          if (!parsed.packingItems[r]) parsed.packingItems[r] = DEFAULT_PACKING.map((item) => ({ ...item }));
           if (!parsed.checklistTargets[r]) {
             parsed.checklistTargets[r] = {};
-            DEFAULT_CHECKLIST.forEach((item) => {
+            ALL_DEFAULTS.forEach((item) => {
               if (item.type === "count") parsed.checklistTargets[r][item.id] = item.max;
             });
           }
-          parsed.checklistItems[r].forEach((item) => {
+          [...parsed.purchaseItems[r], ...parsed.packingItems[r]].forEach((item) => {
             if (parsed.checklist[r][item.id] === undefined) {
               parsed.checklist[r][item.id] = item.type === "tick" ? false : 0;
             }
@@ -644,20 +797,22 @@ export default function GravelDashboard() {
     });
   }, [riderName]);
 
-  const addChecklistItem = useCallback((item) => {
+  const addItem = useCallback((category, item) => {
     setState((prev) => {
       const next = JSON.parse(JSON.stringify(prev));
-      next.checklistItems[riderName].push(item);
+      const key = category === "purchases" ? "purchaseItems" : "packingItems";
+      next[key][riderName].push(item);
       next.checklist[riderName][item.id] = item.type === "tick" ? false : 0;
       if (item.type === "count") next.checklistTargets[riderName][item.id] = item.max;
       return next;
     });
   }, [riderName]);
 
-  const deleteChecklistItem = useCallback((itemId) => {
+  const deleteItem = useCallback((category, itemId) => {
     setState((prev) => {
       const next = JSON.parse(JSON.stringify(prev));
-      next.checklistItems[riderName] = next.checklistItems[riderName].filter((i) => i.id !== itemId);
+      const key = category === "purchases" ? "purchaseItems" : "packingItems";
+      next[key][riderName] = next[key][riderName].filter((i) => i.id !== itemId);
       delete next.checklist[riderName][itemId];
       delete next.checklistTargets[riderName][itemId];
       return next;
@@ -668,6 +823,16 @@ export default function GravelDashboard() {
     setState((prev) => {
       const next = JSON.parse(JSON.stringify(prev));
       next.checklistTargets[riderName][itemId] = newMax;
+      return next;
+    });
+  }, [riderName]);
+
+  const editItemLabel = useCallback((category, itemId, newLabel) => {
+    setState((prev) => {
+      const next = JSON.parse(JSON.stringify(prev));
+      const key = category === "purchases" ? "purchaseItems" : "packingItems";
+      const item = next[key][riderName].find((i) => i.id === itemId);
+      if (item) item.label = newLabel;
       return next;
     });
   }, [riderName]);
@@ -698,13 +863,21 @@ export default function GravelDashboard() {
     });
   }, [riderName]);
 
+  const updatePowerMeter = useCallback((amount) => {
+    setState((prev) => {
+      const next = JSON.parse(JSON.stringify(prev));
+      next.powerMeterSaved = amount;
+      return next;
+    });
+  }, []);
+
   const renameRider = useCallback((index, newName) => {
     setState((prev) => {
       const next = JSON.parse(JSON.stringify(prev));
       const oldName = next.riderNames[index];
       if (oldName === newName || !newName.trim()) return prev;
       next.riderNames[index] = newName.trim();
-      for (const key of ["checklist", "checklistItems", "checklistTargets", "training", "flights"]) {
+      for (const key of ["checklist", "purchaseItems", "packingItems", "checklistTargets", "training", "flights"]) {
         next[key][newName.trim()] = next[key][oldName];
         delete next[key][oldName];
       }
@@ -714,7 +887,7 @@ export default function GravelDashboard() {
   }, []);
 
   const tabs = hasFlight ? ["checklist", "training", "flights"] : ["checklist", "training"];
-  const tabLabels = { checklist: "Kit Checklist", training: "Training Log", flights: "Flights" };
+  const tabLabels = { checklist: "Checklists", training: "Training Log", flights: "Flights" };
 
   if (loading || !state) {
     return (
@@ -726,22 +899,20 @@ export default function GravelDashboard() {
 
   return (
     <div style={s.root}>
-      {/* Grain texture overlay */}
       <div style={s.grain} />
 
-      {/* Header */}
       <header style={s.header}>
         <div style={s.headerBadge}>GRAVEL</div>
         <h1 style={s.title}>Brisbane &rarr; Sunshine Coast</h1>
         <p style={s.subtitle}>6 June 2026 &middot; The Long Way Round</p>
       </header>
 
-      {/* Countdown */}
       <section style={s.countdownSection}>
         <CountdownBlock countdown={countdown} />
       </section>
 
-      {/* Route & Elevation */}
+      <PowerMeterTracker saved={state.powerMeterSaved} onUpdate={updatePowerMeter} />
+
       <RoutePanel />
 
       {/* Rider tabs */}
@@ -779,16 +950,30 @@ export default function GravelDashboard() {
       {/* Content */}
       <main style={s.main}>
         {tab === "checklist" ? (
-          <ChecklistPanel
-            rider={riderName}
-            items={state.checklistItems[riderName] || []}
-            targets={state.checklistTargets[riderName] || {}}
-            values={state.checklist[riderName] || {}}
-            onChange={updateChecklist}
-            onDeleteItem={deleteChecklistItem}
-            onAddItem={addChecklistItem}
-            onEditTarget={editTarget}
-          />
+          <>
+            <ChecklistPanel
+              title="Purchases Checklist"
+              items={state.purchaseItems[riderName] || []}
+              targets={state.checklistTargets[riderName] || {}}
+              values={state.checklist[riderName] || {}}
+              onChange={updateChecklist}
+              onDeleteItem={(id) => deleteItem("purchases", id)}
+              onAddItem={(item) => addItem("purchases", item)}
+              onEditTarget={editTarget}
+              onEditItemLabel={(id, label) => editItemLabel("purchases", id, label)}
+            />
+            <ChecklistPanel
+              title="Packing Checklist"
+              items={state.packingItems[riderName] || []}
+              targets={state.checklistTargets[riderName] || {}}
+              values={state.checklist[riderName] || {}}
+              onChange={updateChecklist}
+              onDeleteItem={(id) => deleteItem("packing", id)}
+              onAddItem={(item) => addItem("packing", item)}
+              onEditTarget={editTarget}
+              onEditItemLabel={(id, label) => editItemLabel("packing", id, label)}
+            />
+          </>
         ) : tab === "training" ? (
           <TrainingPanel rider={riderName} sessions={state.training[riderName] || []} onAdd={addSession} onRemove={removeSession} />
         ) : tab === "flights" && hasFlight ? (
@@ -796,7 +981,7 @@ export default function GravelDashboard() {
         ) : null}
       </main>
       <footer style={s.footer}>
-        double-tap rider name to rename &middot; data saved locally
+        double-tap to edit item names &middot; data saved locally
       </footer>
     </div>
   );
@@ -846,7 +1031,7 @@ const s = {
   },
   subtitle: { fontSize: 11, color: T.textDim, letterSpacing: 3, textTransform: "uppercase", margin: 0 },
 
-  countdownSection: { margin: "28px 0 24px", position: "relative", zIndex: 1 },
+  countdownSection: { margin: "28px 0 20px", position: "relative", zIndex: 1 },
   countdownRow: { display: "flex", justifyContent: "center", gap: 4 },
   countdownUnit: { display: "flex", flexDirection: "column", alignItems: "center", minWidth: 56 },
   countdownNumber: {
@@ -854,6 +1039,49 @@ const s = {
   },
   countdownLabel: { fontSize: 9, letterSpacing: 3, color: T.textMuted, marginTop: 4 },
   countdownSep: { fontFamily: FONT_DISPLAY, fontSize: "clamp(28px, 8vw, 44px)", color: T.accent, marginTop: 2, opacity: 0.5 },
+
+  // Power meter tracker
+  powerCard: {
+    position: "relative", zIndex: 1,
+    margin: "0 0 20px",
+    padding: "14px 16px",
+    background: T.white,
+    border: `1px solid ${T.electricBorder}`,
+    borderRadius: 8,
+    overflow: "hidden",
+  },
+  powerHeader: {
+    display: "flex", alignItems: "center", marginBottom: 10,
+  },
+  powerTitle: {
+    fontFamily: FONT_DISPLAY, fontSize: 13, letterSpacing: 1, textTransform: "uppercase",
+    color: T.text, fontWeight: 600, flex: 1,
+  },
+  powerCost: {
+    fontFamily: FONT_BODY, fontSize: 12, color: T.textDim, fontWeight: 500,
+  },
+  powerBarOuter: {
+    position: "relative", height: 32, background: T.electricLight,
+    borderRadius: 16, overflow: "hidden", border: `1px solid ${T.electricBorder}`,
+  },
+  powerBarInner: {
+    height: "100%", borderRadius: 16,
+    transition: "width 0.5s ease",
+    position: "relative",
+  },
+  powerBarText: {
+    position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
+    fontSize: 10, letterSpacing: 1.5, fontWeight: 600, color: T.text,
+    fontFamily: FONT_BODY, whiteSpace: "nowrap",
+  },
+  powerFooter: {
+    marginTop: 10, display: "flex", alignItems: "center",
+  },
+  powerEditBtn: {
+    fontFamily: FONT_BODY, fontSize: 11, padding: "5px 12px",
+    background: T.electricLight, color: T.electric, border: `1px solid ${T.electricBorder}`,
+    borderRadius: 4, cursor: "pointer", letterSpacing: 0.5,
+  },
 
   riderNav: { display: "flex", gap: 8, justifyContent: "center", marginBottom: 8, position: "relative", zIndex: 1 },
   riderTab: {
@@ -890,8 +1118,18 @@ const s = {
     background: T.accent, color: T.white, border: "none", borderRadius: 4,
     cursor: "pointer", fontWeight: 600, letterSpacing: 0.5,
   },
+  primaryBtnSmall: {
+    fontFamily: FONT_BODY, fontSize: 11, padding: "5px 12px",
+    background: T.electric, color: T.white, border: "none", borderRadius: 4,
+    cursor: "pointer", fontWeight: 600,
+  },
   ghostBtn: {
     fontFamily: FONT_BODY, fontSize: 12, padding: "8px 16px",
+    background: "transparent", color: T.textDim, border: `1px solid ${T.border}`, borderRadius: 4,
+    cursor: "pointer",
+  },
+  ghostBtnSmall: {
+    fontFamily: FONT_BODY, fontSize: 11, padding: "5px 12px",
     background: "transparent", color: T.textDim, border: `1px solid ${T.border}`, borderRadius: 4,
     cursor: "pointer",
   },
@@ -906,13 +1144,17 @@ const s = {
   },
   addItemForm: {
     padding: 12, background: T.white, border: `1px solid ${T.border}`,
-    borderRadius: 6, marginBottom: 12, display: "flex", flexDirection: "column", gap: 8,
+    borderRadius: 6, marginBottom: 8, display: "flex", flexDirection: "column", gap: 8,
   },
 
   // Checklist
+  checklistSectionTitle: {
+    fontFamily: FONT_DISPLAY, fontSize: 14, letterSpacing: 3, textTransform: "uppercase",
+    color: T.accent, marginBottom: 8, fontWeight: 600,
+  },
   progressBarOuter: {
     position: "relative", height: 28, background: T.borderLight, borderRadius: 6,
-    overflow: "hidden", marginBottom: 12, border: `1px solid ${T.border}`,
+    overflow: "hidden", marginBottom: 8, border: `1px solid ${T.border}`,
   },
   progressBarInner: { height: "100%", transition: "width 0.4s ease, background 0.4s ease", borderRadius: 6 },
   progressText: {
@@ -993,17 +1235,18 @@ const s = {
   },
   routeLabels: {
     position: "absolute", bottom: 8, left: 12, right: 12,
-    display: "flex", justifyContent: "space-between",
+    display: "flex", justifyContent: "space-between", alignItems: "center",
   },
   routeLabelStart: {
     fontFamily: FONT_BODY, fontSize: 9, letterSpacing: 2, textTransform: "uppercase",
-    color: T.green, fontWeight: 600, background: "rgba(255,255,255,0.85)",
-    padding: "2px 6px", borderRadius: 3,
+    color: T.green, fontWeight: 600, background: "rgba(255,255,255,0.9)",
+    padding: "3px 8px", borderRadius: 3,
   },
   routeLabelEnd: {
     fontFamily: FONT_BODY, fontSize: 9, letterSpacing: 2, textTransform: "uppercase",
-    color: T.accent, fontWeight: 600, background: "rgba(255,255,255,0.85)",
-    padding: "2px 6px", borderRadius: 3,
+    color: T.accent, fontWeight: 600, background: "rgba(255,255,255,0.9)",
+    padding: "3px 8px", borderRadius: 3, textDecoration: "none",
+    display: "flex", alignItems: "center",
   },
   elevWrap: {
     padding: "12px 16px 8px",
