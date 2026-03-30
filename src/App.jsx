@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { elevationProfile, routeCoords } from "./routeData.js";
+import { subscribeToState, saveState } from "./firebase.js";
 
 const RIDE_DATE = new Date("2026-06-06T05:00:00+10:00");
 
@@ -122,37 +123,17 @@ function migrateState(parsed) {
   return parsed;
 }
 
-// Save immediately + debounced
-function useSave(state) {
+// Debounced Firestore save — skips saves triggered by incoming Firestore updates
+function useSave(state, isRemoteUpdate) {
   const timer = useRef(null);
-  const stateRef = useRef(state);
-  stateRef.current = state;
-
-  const flushSave = useCallback(() => {
-    if (!stateRef.current) return;
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(stateRef.current));
-    } catch (e) {
-      console.error("Save failed:", e);
-    }
-  }, []);
-
   useEffect(() => {
-    if (!state) return;
+    if (!state || isRemoteUpdate.current) return;
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(flushSave, 400);
+    timer.current = setTimeout(() => {
+      saveState(state);
+    }, 500);
     return () => clearTimeout(timer.current);
-  }, [state, flushSave]);
-
-  // Save on page unload
-  useEffect(() => {
-    const handler = () => flushSave();
-    window.addEventListener("beforeunload", handler);
-    window.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "hidden") flushSave();
-    });
-    return () => window.removeEventListener("beforeunload", handler);
-  }, [flushSave]);
+  }, [state, isRemoteUpdate]);
 }
 
 function useCountdown(target) {
@@ -307,8 +288,8 @@ function RoutePanel() {
   const MAP_H = 180;
   const ELEV_H = 100;
 
-  const routePath = useMemo(() => {
-    if (!routeCoords.length) return "";
+  const { routePath, startPt, endPt } = useMemo(() => {
+    if (!routeCoords.length) return { routePath: "", startPt: null, endPt: null };
     const lats = routeCoords.map((c) => c[0]);
     const lons = routeCoords.map((c) => c[1]);
     const minLat = Math.min(...lats), maxLat = Math.max(...lats);
@@ -316,13 +297,22 @@ function RoutePanel() {
     const pad = 16;
     const w = W - pad * 2, h = MAP_H - pad * 2;
     const scale = Math.min(w / (maxLon - minLon), h / (maxLat - minLat));
-    return routeCoords
+    // Center the route within the SVG
+    const routeW = (maxLon - minLon) * scale;
+    const routeH = (maxLat - minLat) * scale;
+    const offsetX = pad + (w - routeW) / 2;
+    const offsetY = pad + (h - routeH) / 2;
+    const toXY = (c) => ({
+      x: offsetX + (c[1] - minLon) * scale,
+      y: offsetY + (maxLat - c[0]) * scale,
+    });
+    const path = routeCoords
       .map((c, i) => {
-        const x = pad + (c[1] - minLon) * scale;
-        const y = pad + (maxLat - c[0]) * scale;
+        const { x, y } = toXY(c);
         return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
       })
       .join(" ");
+    return { routePath: path, startPt: toXY(routeCoords[0]), endPt: toXY(routeCoords[routeCoords.length - 1]) };
   }, []);
 
   const { elevPath, elevFill, elevLabels } = useMemo(() => {
@@ -360,30 +350,23 @@ function RoutePanel() {
           )}
           <path d={routePath} fill="none" stroke={T.accent} strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" opacity="0.15" />
           <path d={routePath} fill="none" stroke={T.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-          {routeCoords.length > 0 && (() => {
-            const lats = routeCoords.map(c => c[0]), lons = routeCoords.map(c => c[1]);
-            const minLat = Math.min(...lats), maxLat = Math.max(...lats);
-            const minLon = Math.min(...lons), maxLon = Math.max(...lons);
-            const scale = Math.min((W - 32) / (maxLon - minLon), (MAP_H - 32) / (maxLat - minLat));
-            const sx = 16 + (routeCoords[0][1] - minLon) * scale;
-            const sy = 16 + (maxLat - routeCoords[0][0]) * scale;
-            const ex = 16 + (routeCoords[routeCoords.length-1][1] - minLon) * scale;
-            const ey = 16 + (maxLat - routeCoords[routeCoords.length-1][0]) * scale;
-            return <>
-              <circle cx={sx} cy={sy} r="5" fill={T.green} />
-              <circle cx={sx} cy={sy} r="2" fill={T.white} />
-              <circle cx={ex} cy={ey} r="5" fill={T.accent} />
-              <circle cx={ex} cy={ey} r="2" fill={T.white} />
-            </>;
-          })()}
+          {startPt && endPt && <>
+            <circle cx={startPt.x} cy={startPt.y} r="5" fill={T.green} />
+            <circle cx={startPt.x} cy={startPt.y} r="2" fill={T.white} />
+            <circle cx={endPt.x} cy={endPt.y} r="5" fill={T.accent} />
+            <circle cx={endPt.x} cy={endPt.y} r="2" fill={T.white} />
+            {/* Brisbane label */}
+            <text x={startPt.x} y={startPt.y + 16} fontSize="9" fontFamily={FONT_BODY} fill={T.green}
+              letterSpacing="2" fontWeight="600" textAnchor="middle">BRISBANE</text>
+            {/* Hatched Chicken label next to destination */}
+            <image href="https://hatchedchicken.com.au/wp-content/uploads/2025/10/logo-sandhat.png"
+              x={endPt.x + 10} y={endPt.y - 10} width="20" height="20" />
+            <a href="https://hatchedchicken.com.au/" target="_blank">
+              <text x={endPt.x + 34} y={endPt.y + 4} fontSize="9" fontFamily={FONT_BODY} fill={T.accent}
+                letterSpacing="2" fontWeight="600" style={{ cursor: "pointer" }}>HATCHED CHICKEN</text>
+            </a>
+          </>}
         </svg>
-        <div style={s.routeLabels}>
-          <span style={s.routeLabelStart}>Brisbane</span>
-          <a href="https://hatchedchicken.com.au/" target="_blank" rel="noopener noreferrer" style={s.routeLabelEnd}>
-            <img src="https://hatchedchicken.com.au/wp-content/uploads/2025/10/logo-sandhat.png" alt="Hatched Chicken" style={{ height: 18, marginRight: 5, verticalAlign: "middle", borderRadius: 2 }} />
-            Hatched Chicken
-          </a>
-        </div>
       </div>
 
       <div style={s.elevWrap}>
@@ -733,58 +716,58 @@ export default function GravelDashboard() {
   const [tab, setTab] = useState("checklist");
   const [editingName, setEditingName] = useState(null);
   const countdown = useCountdown(RIDE_DATE.getTime());
+  const isRemoteUpdate = useRef(false);
 
-  useSave(state);
+  useSave(state, isRemoteUpdate);
 
-  useEffect(() => {
-    try {
-      let raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) raw = localStorage.getItem("gravel-dash-v2");
-      if (!raw) raw = localStorage.getItem("gravel-dash-v1");
-      if (raw) {
-        const parsed = migrateState(JSON.parse(raw));
-        parsed.riderNames = parsed.riderNames || [...RIDERS];
-        // Rename "Rider 3" to "Gus" if migrating
-        const r3idx = parsed.riderNames.indexOf("Rider 3");
-        if (r3idx !== -1) {
-          const oldName = "Rider 3";
-          const newName = "Gus";
-          parsed.riderNames[r3idx] = newName;
-          for (const key of ["checklist", "purchaseItems", "packingItems", "checklistTargets", "training", "flights"]) {
-            if (parsed[key] && parsed[key][oldName]) {
-              parsed[key][newName] = parsed[key][oldName];
-              delete parsed[key][oldName];
-            }
-          }
+  // Hydrate and ensure state structure
+  const hydrateState = useCallback((raw) => {
+    if (!raw) return getDefaultState();
+    const parsed = migrateState(typeof raw === "string" ? JSON.parse(raw) : { ...raw });
+    parsed.riderNames = parsed.riderNames || [...RIDERS];
+    const r3idx = parsed.riderNames.indexOf("Rider 3");
+    if (r3idx !== -1) {
+      const oldName = "Rider 3", newName = "Gus";
+      parsed.riderNames[r3idx] = newName;
+      for (const key of ["checklist", "purchaseItems", "packingItems", "checklistTargets", "training", "flights"]) {
+        if (parsed[key] && parsed[key][oldName]) {
+          parsed[key][newName] = parsed[key][oldName];
+          delete parsed[key][oldName];
         }
-        // Ensure all riders have entries
-        parsed.riderNames.forEach((r) => {
-          if (!parsed.checklist[r]) parsed.checklist[r] = {};
-          if (!parsed.purchaseItems[r]) parsed.purchaseItems[r] = DEFAULT_PURCHASES.map((item) => ({ ...item }));
-          if (!parsed.packingItems[r]) parsed.packingItems[r] = DEFAULT_PACKING.map((item) => ({ ...item }));
-          if (!parsed.checklistTargets[r]) {
-            parsed.checklistTargets[r] = {};
-            ALL_DEFAULTS.forEach((item) => {
-              if (item.type === "count") parsed.checklistTargets[r][item.id] = item.max;
-            });
-          }
-          [...parsed.purchaseItems[r], ...parsed.packingItems[r]].forEach((item) => {
-            if (parsed.checklist[r][item.id] === undefined) {
-              parsed.checklist[r][item.id] = item.type === "tick" ? false : 0;
-            }
-          });
-          if (!parsed.training[r]) parsed.training[r] = [];
-          if (!parsed.flights[r]) parsed.flights[r] = [];
-        });
-        setState(parsed);
-      } else {
-        setState(getDefaultState());
       }
-    } catch {
-      setState(getDefaultState());
     }
-    setLoading(false);
+    parsed.riderNames.forEach((r) => {
+      if (!parsed.checklist[r]) parsed.checklist[r] = {};
+      if (!parsed.purchaseItems[r]) parsed.purchaseItems[r] = DEFAULT_PURCHASES.map((item) => ({ ...item }));
+      if (!parsed.packingItems[r]) parsed.packingItems[r] = DEFAULT_PACKING.map((item) => ({ ...item }));
+      if (!parsed.checklistTargets[r]) {
+        parsed.checklistTargets[r] = {};
+        ALL_DEFAULTS.forEach((item) => {
+          if (item.type === "count") parsed.checklistTargets[r][item.id] = item.max;
+        });
+      }
+      [...parsed.purchaseItems[r], ...parsed.packingItems[r]].forEach((item) => {
+        if (parsed.checklist[r][item.id] === undefined) {
+          parsed.checklist[r][item.id] = item.type === "tick" ? false : 0;
+        }
+      });
+      if (!parsed.training[r]) parsed.training[r] = [];
+      if (!parsed.flights[r]) parsed.flights[r] = [];
+    });
+    return parsed;
   }, []);
+
+  // Subscribe to Firestore for real-time sync across devices
+  useEffect(() => {
+    const unsub = subscribeToState((data) => {
+      isRemoteUpdate.current = true;
+      setState(hydrateState(data));
+      setLoading(false);
+      // Reset flag after React processes the update
+      setTimeout(() => { isRemoteUpdate.current = false; }, 50);
+    });
+    return () => unsub();
+  }, [hydrateState]);
 
   const riderName = state?.riderNames?.[activeRider] || RIDERS[activeRider];
   const hasFlight = RIDERS_WITH_FLIGHTS.includes(riderName);
