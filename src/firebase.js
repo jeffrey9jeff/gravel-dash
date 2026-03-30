@@ -18,7 +18,12 @@ const DOC_REF = doc(db, "app", "state");
 export function subscribeToState(callback) {
   return onSnapshot(DOC_REF, (snap) => {
     if (snap.exists()) {
-      callback(snap.data());
+      const data = snap.data();
+      try {
+        callback(JSON.parse(data.json));
+      } catch {
+        callback(null);
+      }
     } else {
       callback(null);
     }
@@ -29,7 +34,7 @@ export function subscribeToState(callback) {
 
 export async function saveState(state) {
   try {
-    await setDoc(DOC_REF, state);
+    await setDoc(DOC_REF, { json: JSON.stringify(state) });
   } catch (e) {
     console.error("Firestore save failed:", e);
   }
