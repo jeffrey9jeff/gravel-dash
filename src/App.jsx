@@ -600,7 +600,9 @@ function ChecklistPanel({ title, category, items, targets, values, onChange, onD
   const total = items.length;
   const done = items.filter((item) => {
     const val = values[item.id];
-    return item.type === "tick" ? val === true : val > 0;
+    if (item.type === "tick") return val === true;
+    const target = targets[item.id] || item.max || 1;
+    return val >= target;
   }).length;
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
 
