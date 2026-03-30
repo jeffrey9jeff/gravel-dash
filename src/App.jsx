@@ -587,7 +587,7 @@ function TrainingPanel({ rider, sessions, onAdd, onRemove }) {
   );
 }
 
-function ChecklistPanel({ title, items, targets, values, onChange, onDeleteItem, onAddItem, onEditTarget, onEditItemLabel }) {
+function ChecklistPanel({ title, category, items, targets, values, onChange, onDeleteItem, onAddItem, onEditTarget, onEditItemLabel, onDrop, dragState, onDragStart }) {
   const [newLabel, setNewLabel] = useState("");
   const [newType, setNewType] = useState("tick");
   const [newMax, setNewMax] = useState(3);
@@ -595,6 +595,7 @@ function ChecklistPanel({ title, items, targets, values, onChange, onDeleteItem,
   const [editingTarget, setEditingTarget] = useState(null);
   const [editingLabel, setEditingLabel] = useState(null);
   const [editLabelVal, setEditLabelVal] = useState("");
+  const [dropTarget, setDropTarget] = useState(null); // index where item will be inserted
 
   const total = items.length;
   const done = items.filter((item) => {
@@ -621,8 +622,40 @@ function ChecklistPanel({ title, items, targets, values, onChange, onDeleteItem,
     setEditingLabel(null);
   };
 
+  const handleDragOver = (e, idx) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDropTarget(idx);
+  };
+
+  const handleDragLeave = () => {
+    setDropTarget(null);
+  };
+
+  const handleDropOnItem = (e, idx) => {
+    e.preventDefault();
+    setDropTarget(null);
+    if (dragState) {
+      onDrop(dragState.fromCategory, category, dragState.itemId, idx);
+    }
+  };
+
+  const handleDropOnEmpty = (e) => {
+    e.preventDefault();
+    setDropTarget(null);
+    if (dragState) {
+      onDrop(dragState.fromCategory, category, dragState.itemId, items.length);
+    }
+  };
+
+  const isDragging = dragState !== null;
+
   return (
-    <div style={{ marginBottom: 20 }}>
+    <div
+      style={{ marginBottom: 20 }}
+      onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }}
+      onDrop={handleDropOnEmpty}
+    >
       <div style={s.checklistSectionTitle}>{title}</div>
 
       {/* Add item */}
@@ -663,77 +696,118 @@ function ChecklistPanel({ title, items, targets, values, onChange, onDeleteItem,
 
       {/* Items */}
       <div style={s.checklistGrid}>
-        {items.map((item) => {
+        {items.map((item, idx) => {
           const target = targets[item.id] || item.max;
+          const isBeingDragged = dragState && dragState.itemId === item.id && dragState.fromCategory === category;
           return (
-            <div key={item.id} style={s.checklistItem}>
-              {item.type === "tick" ? (
-                <button onClick={() => onChange(item.id, !values[item.id])} style={{
-                  ...s.tickBtn,
-                  background: values[item.id] ? T.green : T.white,
-                  color: values[item.id] ? T.white : T.textMuted,
-                  borderColor: values[item.id] ? T.green : T.border,
-                }}>
-                  {values[item.id] ? "\u2713" : ""}
-                </button>
-              ) : (
-                <div style={s.counterGroup}>
-                  <button onClick={() => onChange(item.id, Math.max(0, (values[item.id] || 0) - 1))} style={s.counterBtn}>&minus;</button>
-                  <span style={s.counterVal}>{values[item.id] || 0}</span>
-                  <button onClick={() => onChange(item.id, Math.min(target || 99, (values[item.id] || 0) + 1))} style={s.counterBtn}>+</button>
-                </div>
+            <div key={item.id}>
+              {/* Drop indicator line */}
+              {dropTarget === idx && isDragging && (
+                <div style={s.dropIndicator} />
               )}
-              <span style={{
-                ...s.checklistLabel,
-                flex: 1,
-                opacity: (item.type === "tick" && values[item.id]) || (item.type === "count" && values[item.id] > 0) ? 0.45 : 1,
-                textDecoration: (item.type === "tick" && values[item.id]) || (item.type === "count" && values[item.id] >= target) ? "line-through" : "none",
-              }}>
-                {editingLabel === item.id ? (
-                  <input
-                    autoFocus
-                    value={editLabelVal}
-                    onChange={(e) => setEditLabelVal(e.target.value)}
-                    onBlur={() => handleLabelSave(item.id)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") handleLabelSave(item.id);
-                      if (e.key === "Escape") setEditingLabel(null);
-                    }}
-                    style={{ ...s.formInput, padding: "2px 6px", fontSize: 12, width: "100%" }}
-                  />
+              <div
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.effectAllowed = "move";
+                  e.dataTransfer.setData("text/plain", item.id);
+                  onDragStart(category, item.id);
+                }}
+                onDragEnd={() => { setDropTarget(null); }}
+                onDragOver={(e) => handleDragOver(e, idx)}
+                onDragLeave={handleDragLeave}
+                onDrop={(e) => handleDropOnItem(e, idx)}
+                style={{
+                  ...s.checklistItem,
+                  opacity: isBeingDragged ? 0.4 : 1,
+                  cursor: "grab",
+                }}
+              >
+                <div style={s.dragHandle} title="Drag to reorder">
+                  <span style={{ color: T.textMuted, fontSize: 10, lineHeight: 1, userSelect: "none" }}>&#x2630;</span>
+                </div>
+                {item.type === "tick" ? (
+                  <button onClick={() => onChange(item.id, !values[item.id])} style={{
+                    ...s.tickBtn,
+                    background: values[item.id] ? T.green : T.white,
+                    color: values[item.id] ? T.white : T.textMuted,
+                    borderColor: values[item.id] ? T.green : T.border,
+                  }}>
+                    {values[item.id] ? "\u2713" : ""}
+                  </button>
                 ) : (
-                  <span
-                    onDoubleClick={() => { setEditingLabel(item.id); setEditLabelVal(item.label); }}
-                    title="Double-tap to edit"
-                    style={{ cursor: "default" }}
-                  >
-                    {item.label}
-                  </span>
+                  <div style={s.counterGroup}>
+                    <button onClick={() => onChange(item.id, Math.max(0, (values[item.id] || 0) - 1))} style={s.counterBtn}>&minus;</button>
+                    <span style={s.counterVal}>{values[item.id] || 0}</span>
+                    <button onClick={() => onChange(item.id, Math.min(target || 99, (values[item.id] || 0) + 1))} style={s.counterBtn}>+</button>
+                  </div>
                 )}
-                {item.type === "count" && editingLabel !== item.id && (
-                  editingTarget === item.id ? (
+                <span style={{
+                  ...s.checklistLabel,
+                  flex: 1,
+                  opacity: (item.type === "tick" && values[item.id]) || (item.type === "count" && values[item.id] > 0) ? 0.45 : 1,
+                  textDecoration: (item.type === "tick" && values[item.id]) || (item.type === "count" && values[item.id] >= target) ? "line-through" : "none",
+                }}>
+                  {editingLabel === item.id ? (
                     <input
                       autoFocus
-                      type="number"
-                      min="1"
-                      defaultValue={target}
-                      onBlur={(e) => { onEditTarget(item.id, parseInt(e.target.value) || target); setEditingTarget(null); }}
+                      value={editLabelVal}
+                      onChange={(e) => setEditLabelVal(e.target.value)}
+                      onBlur={() => handleLabelSave(item.id)}
                       onKeyDown={(e) => {
-                        if (e.key === "Enter") { onEditTarget(item.id, parseInt(e.target.value) || target); setEditingTarget(null); }
-                        if (e.key === "Escape") setEditingTarget(null);
+                        if (e.key === "Enter") handleLabelSave(item.id);
+                        if (e.key === "Escape") setEditingLabel(null);
                       }}
-                      style={{ ...s.formInput, width: 40, marginLeft: 6, padding: "2px 4px", textAlign: "center", fontSize: 11 }}
+                      style={{ ...s.formInput, padding: "2px 6px", fontSize: 12, width: "100%" }}
                     />
                   ) : (
-                    <span onClick={() => setEditingTarget(item.id)} style={s.targetLabel} title="Click to edit target"> /{target}</span>
-                  )
-                )}
-              </span>
-              <button onClick={() => onDeleteItem(item.id)} style={s.deleteBtn}>&times;</button>
+                    <span
+                      onDoubleClick={() => { setEditingLabel(item.id); setEditLabelVal(item.label); }}
+                      title="Double-tap to edit"
+                      style={{ cursor: "default" }}
+                    >
+                      {item.label}
+                    </span>
+                  )}
+                  {item.type === "count" && editingLabel !== item.id && (
+                    editingTarget === item.id ? (
+                      <input
+                        autoFocus
+                        type="number"
+                        min="1"
+                        defaultValue={target}
+                        onBlur={(e) => { onEditTarget(item.id, parseInt(e.target.value) || target); setEditingTarget(null); }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") { onEditTarget(item.id, parseInt(e.target.value) || target); setEditingTarget(null); }
+                          if (e.key === "Escape") setEditingTarget(null);
+                        }}
+                        style={{ ...s.formInput, width: 40, marginLeft: 6, padding: "2px 4px", textAlign: "center", fontSize: 11 }}
+                      />
+                    ) : (
+                      <span onClick={() => setEditingTarget(item.id)} style={s.targetLabel} title="Click to edit target"> /{target}</span>
+                    )
+                  )}
+                </span>
+                <button onClick={() => onDeleteItem(item.id)} style={s.deleteBtn}>&times;</button>
+              </div>
             </div>
           );
         })}
+        {/* Drop indicator at end of list */}
+        {dropTarget === items.length && isDragging && (
+          <div style={s.dropIndicator} />
+        )}
       </div>
+
+      {/* Empty drop zone when list is empty */}
+      {items.length === 0 && isDragging && (
+        <div
+          onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }}
+          onDrop={handleDropOnEmpty}
+          style={s.emptyDropZone}
+        >
+          Drop here
+        </div>
+      )}
     </div>
   );
 }
@@ -827,6 +901,31 @@ export default function GravelDashboard() {
       return next;
     });
   }, [riderName]);
+
+  const [dragState, setDragState] = useState(null);
+
+  const moveItem = useCallback((fromCategory, toCategory, itemId, toIndex) => {
+    setState((prev) => {
+      const next = JSON.parse(JSON.stringify(prev));
+      const fromKey = fromCategory === "purchases" ? "purchaseItems" : "packingItems";
+      const toKey = toCategory === "purchases" ? "purchaseItems" : "packingItems";
+      const fromList = next[fromKey][riderName];
+      const itemIdx = fromList.findIndex((i) => i.id === itemId);
+      if (itemIdx === -1) return prev;
+      const [item] = fromList.splice(itemIdx, 1);
+      const toList = next[toKey][riderName];
+      // Adjust index if moving within same list and item was before target
+      let insertAt = toIndex;
+      if (fromKey === toKey && itemIdx < toIndex) insertAt--;
+      toList.splice(Math.max(0, Math.min(insertAt, toList.length)), 0, item);
+      return next;
+    });
+    setDragState(null);
+  }, [riderName]);
+
+  const handleDragStart = useCallback((fromCategory, itemId) => {
+    setDragState({ fromCategory, itemId });
+  }, []);
 
   const editItemLabel = useCallback((category, itemId, newLabel) => {
     setState((prev) => {
@@ -954,6 +1053,7 @@ export default function GravelDashboard() {
           <>
             <ChecklistPanel
               title="Purchases Checklist"
+              category="purchases"
               items={state.purchaseItems[riderName] || []}
               targets={state.checklistTargets[riderName] || {}}
               values={state.checklist[riderName] || {}}
@@ -962,9 +1062,13 @@ export default function GravelDashboard() {
               onAddItem={(item) => addItem("purchases", item)}
               onEditTarget={editTarget}
               onEditItemLabel={(id, label) => editItemLabel("purchases", id, label)}
+              onDrop={moveItem}
+              dragState={dragState}
+              onDragStart={handleDragStart}
             />
             <ChecklistPanel
               title="Packing Checklist"
+              category="packing"
               items={state.packingItems[riderName] || []}
               targets={state.checklistTargets[riderName] || {}}
               values={state.checklist[riderName] || {}}
@@ -973,6 +1077,9 @@ export default function GravelDashboard() {
               onAddItem={(item) => addItem("packing", item)}
               onEditTarget={editTarget}
               onEditItemLabel={(id, label) => editItemLabel("packing", id, label)}
+              onDrop={moveItem}
+              dragState={dragState}
+              onDragStart={handleDragStart}
             />
           </>
         ) : tab === "training" ? (
@@ -1162,7 +1269,21 @@ const s = {
     position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
     fontSize: 10, letterSpacing: 2, fontWeight: 600, color: T.text,
   },
-  checklistGrid: { display: "flex", flexDirection: "column", gap: 2 },
+  checklistGrid: { display: "flex", flexDirection: "column", gap: 2, position: "relative" },
+  dragHandle: {
+    display: "flex", alignItems: "center", justifyContent: "center",
+    width: 16, minWidth: 16, cursor: "grab", opacity: 0.4,
+    transition: "opacity 0.15s",
+  },
+  dropIndicator: {
+    height: 2, background: T.accent, borderRadius: 1, margin: "1px 0",
+    boxShadow: `0 0 4px ${T.accent}`,
+  },
+  emptyDropZone: {
+    padding: "20px 0", textAlign: "center", fontSize: 12, color: T.textMuted,
+    border: `2px dashed ${T.accentBorder}`, borderRadius: 6, marginTop: 4,
+    background: T.accentLight,
+  },
   checklistItem: {
     display: "flex", alignItems: "center", gap: 10, padding: "8px 12px",
     background: T.white, borderRadius: 4, border: `1px solid ${T.borderLight}`, transition: "background 0.15s",
