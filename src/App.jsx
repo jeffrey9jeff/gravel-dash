@@ -123,17 +123,48 @@ function migrateState(parsed) {
   return parsed;
 }
 
-// Debounced Firestore save — skips saves triggered by incoming Firestore updates
-function useSave(state, isRemoteUpdate) {
+// Sync engine: saves local changes immediately, ignores echo snapshots
+function useSync(state, setState, hydrateState, setLoading) {
+  const lastSavedJson = useRef(null);
+  const localChangesPending = useRef(false);
   const timer = useRef(null);
+
+  // Save local changes to Firestore
   useEffect(() => {
-    if (!state || isRemoteUpdate.current) return;
+    if (!state) return;
+    const json = JSON.stringify(state);
+    // Skip if this state matches what we last saved or received from remote
+    if (json === lastSavedJson.current) return;
+    localChangesPending.current = true;
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => {
+      lastSavedJson.current = json;
+      localChangesPending.current = false;
       saveState(state);
-    }, 500);
+    }, 300);
     return () => clearTimeout(timer.current);
-  }, [state, isRemoteUpdate]);
+  }, [state]);
+
+  // Subscribe to remote changes
+  useEffect(() => {
+    const unsub = subscribeToState((data) => {
+      const remoteJson = data ? JSON.stringify(data) : null;
+      // Skip if we have pending local changes — our save will overwrite remote anyway
+      if (localChangesPending.current) {
+        setLoading(false);
+        return;
+      }
+      // Skip if remote matches what we already have
+      if (remoteJson && remoteJson === lastSavedJson.current) {
+        setLoading(false);
+        return;
+      }
+      lastSavedJson.current = remoteJson;
+      setState(hydrateState(data));
+      setLoading(false);
+    });
+    return () => unsub();
+  }, [setState, hydrateState, setLoading]);
 }
 
 function useCountdown(target) {
@@ -716,9 +747,6 @@ export default function GravelDashboard() {
   const [tab, setTab] = useState("checklist");
   const [editingName, setEditingName] = useState(null);
   const countdown = useCountdown(RIDE_DATE.getTime());
-  const isRemoteUpdate = useRef(false);
-
-  useSave(state, isRemoteUpdate);
 
   // Hydrate and ensure state structure
   const hydrateState = useCallback((raw) => {
@@ -757,17 +785,7 @@ export default function GravelDashboard() {
     return parsed;
   }, []);
 
-  // Subscribe to Firestore for real-time sync across devices
-  useEffect(() => {
-    const unsub = subscribeToState((data) => {
-      isRemoteUpdate.current = true;
-      setState(hydrateState(data));
-      setLoading(false);
-      // Reset flag after React processes the update
-      setTimeout(() => { isRemoteUpdate.current = false; }, 50);
-    });
-    return () => unsub();
-  }, [hydrateState]);
+  useSync(state, setState, hydrateState, setLoading);
 
   const riderName = state?.riderNames?.[activeRider] || RIDERS[activeRider];
   const hasFlight = RIDERS_WITH_FLIGHTS.includes(riderName);
